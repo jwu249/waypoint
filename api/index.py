@@ -24,7 +24,7 @@ def geocode_destination(destination):
     try:
         resp = http_requests.get(
             'https://photon.komoot.io/api/',
-            params={'q': destination, 'limit': 1},
+            params={'q': destination, 'limit': 1, 'lang': 'en'},
             headers={'User-Agent': 'Waypoint/1.0 (travel itinerary app)'},
             timeout=6,
         )
@@ -35,6 +35,141 @@ def geocode_destination(destination):
     except Exception:
         pass
     return None, None
+
+
+def search_destinations(query):
+    """Search destination suggestions using Photon."""
+    if not query:
+        return []
+
+    try:
+        resp = http_requests.get(
+            'https://photon.komoot.io/api/',
+            params={'q': query, 'limit': 5, 'lang': 'en'},
+            headers={'User-Agent': 'Waypoint/1.0 (travel itinerary app)'},
+            timeout=6,
+        )
+        features = resp.json().get('features', [])
+        suggestions = []
+
+        for feature in features:
+            props = feature.get('properties', {})
+            locality = (
+                props.get('city')
+                or props.get('name')
+                or props.get('county')
+                or props.get('state')
+            )
+            country = props.get('country')
+            parts = [
+                locality,
+                country,
+            ]
+            label = ', '.join(dict.fromkeys(part for part in parts if part))
+            if not label:
+                continue
+
+            suggestions.append({
+                'label': label,
+                'name': locality,
+                'city': props.get('city') or props.get('name'),
+                'country': country,
+            })
+
+        unique = []
+        seen = set()
+        for item in suggestions:
+            key = item['label'].lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+
+        return unique
+    except Exception:
+        return []
+
+
+def search_places(query, destination):
+    """Search place suggestions near a destination using Photon."""
+    if not query:
+        return []
+
+    bias_lat, bias_lng = geocode_destination(destination)
+    params = {'q': ', '.join(part for part in [query, destination] if part), 'limit': 5, 'lang': 'en'}
+
+    if bias_lat is not None and bias_lng is not None:
+        params['lat'] = bias_lat
+        params['lon'] = bias_lng
+        params['bbox'] = (
+            f"{bias_lng - 1.5},{bias_lat - 1.5},{bias_lng + 1.5},{bias_lat + 1.5}"
+        )
+
+    def _category_from_props(props):
+        osm_value = (props.get('osm_value') or '').lower()
+        osm_key = (props.get('osm_key') or '').lower()
+
+        if osm_value in {'restaurant', 'cafe', 'bar', 'fast_food', 'bakery', 'pub'}:
+            return 'restaurant'
+        if osm_value in {'hotel', 'hostel', 'guest_house'}:
+            return 'hotel'
+        if osm_value in {'bus_stop', 'station', 'tram_stop', 'ferry_terminal'}:
+            return 'transport'
+        if osm_value in {'museum', 'gallery', 'cinema', 'park', 'viewpoint'}:
+            return 'activity'
+        if osm_key in {'tourism', 'historic', 'leisure', 'amenity', 'shop', 'building'}:
+            return 'attraction'
+        return 'other'
+
+    try:
+        resp = http_requests.get(
+            'https://photon.komoot.io/api/',
+            params=params,
+            headers={'User-Agent': 'Waypoint/1.0 (travel itinerary app)'},
+            timeout=6,
+        )
+        features = resp.json().get('features', [])
+        places = []
+
+        for feature in features:
+            props = feature.get('properties', {})
+            coords = feature.get('geometry', {}).get('coordinates', [None, None])
+            street = props.get('street')
+            house_number = props.get('housenumber')
+            locality = props.get('city') or props.get('district') or props.get('county') or props.get('state')
+            country = props.get('country')
+            address_parts = [
+                ' '.join(part for part in [house_number, street] if part).strip() or None,
+                locality,
+                country,
+            ]
+            address = ', '.join(part for part in address_parts if part)
+            name = props.get('name') or locality or query
+
+            rating_hint = 4.7 if _category_from_props(props) == 'attraction' else 4.5
+
+            places.append({
+                'name': name,
+                'address': address or destination or None,
+                'category': _category_from_props(props),
+                'description': props.get('osm_value') or props.get('type') or '',
+                'rating': rating_hint,
+                'lat': float(coords[1]) if coords[1] is not None else None,
+                'lng': float(coords[0]) if coords[0] is not None else None,
+            })
+
+        unique = []
+        seen = set()
+        for place in places:
+            key = f"{place['name']}|{place['address']}".lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(place)
+
+        return unique
+    except Exception:
+        return []
 
 
 def geocode_stop(name, address, destination, bias_lat=None, bias_lng=None):
@@ -106,6 +241,19 @@ def get_groq_client():
 @app.route('/api/health')
 def health():
     return jsonify({'status': 'ok'})
+
+
+@app.route('/api/destinations')
+def destinations():
+    query = request.args.get('q', '').strip()
+    return jsonify({'destinations': search_destinations(query)})
+
+
+@app.route('/api/place-search')
+def place_search():
+    query = request.args.get('q', '').strip()
+    destination = request.args.get('destination', '').strip()
+    return jsonify({'places': search_places(query, destination)})
 
 
 @app.route('/api/parse', methods=['POST'])

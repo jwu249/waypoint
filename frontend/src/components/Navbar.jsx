@@ -1,12 +1,16 @@
 import { useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
+import BrandMark from './BrandMark';
 
-export default function Navbar({ tripName, onShare }) {
+export default function Navbar({ tripName, tripHref }) {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const tripId = tripHref?.startsWith('/trip/') ? tripHref.slice('/trip/'.length) : '';
+  const exploreHref = tripId ? `/explore?tripId=${tripId}` : '/explore';
 
   const initial = (
     user?.user_metadata?.display_name?.[0] ||
@@ -14,11 +18,17 @@ export default function Navbar({ tripName, onShare }) {
     'U'
   ).toUpperCase();
 
-  const isTrip    = pathname.startsWith('/trip/');
-  const isNew     = pathname === '/new';
+  const isTrip = pathname.startsWith('/trip/');
+  const isNew = pathname === '/new';
   const isExplore = pathname === '/explore';
 
-  const crumb = isTrip ? (tripName || 'Trip') : isNew ? 'New trip' : null;
+  const crumb = isTrip
+    ? (tripName || 'Trip')
+    : isNew
+      ? 'New trip'
+      : isExplore && tripName
+        ? tripName
+        : null;
 
   async function signOut() {
     setDropdownOpen(false);
@@ -26,67 +36,65 @@ export default function Navbar({ tripName, onShare }) {
   }
 
   return (
-    <nav className="navbar">
-      <div className="nav-inner">
-        <div className="nav-left">
-          <Link to="/" className="nav-brand">
-            <div className="nav-brand-circle">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
-                <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
-              </svg>
-            </div>
-            Waypoint
+    <nav className="topbar">
+      <div className="topbar-left">
+        <button
+          className="brand brand-button"
+          onClick={() => navigate('/landing', { state: { replay: Date.now() } })}
+        >
+          <BrandMark size={24} />
+          <span>Waypoint</span>
+        </button>
+
+        <div className="topbar-nav">
+          <Link to="/trips" className={`topbar-link ${pathname === '/trips' ? 'active' : ''}`}>
+            Trips
           </Link>
-
-          <div className="nav-links">
-            <Link to="/"        className={`nav-link ${pathname === '/' ? 'active' : ''}`}>Trips</Link>
-            <Link to="/explore" className={`nav-link ${isExplore ? 'active' : ''}`}>Explore</Link>
-          </div>
-
-          {crumb && (
-            <>
-              <span className="nav-sep">/</span>
-              <span className="nav-crumb">{crumb}</span>
-            </>
-          )}
+          <Link to={exploreHref} className={`topbar-link ${isExplore ? 'active' : ''}`}>
+            Explore
+          </Link>
         </div>
 
-        <div className="nav-right">
-          {(isTrip || isNew) && (
-            <button className="nav-share-btn" onClick={onShare}>Share</button>
-          )}
-          {isTrip && (
-            <button className="btn-primary btn-sm">Save</button>
-          )}
-          <div style={{ position: 'relative' }}>
-            <div
-              className="user-avatar"
-              onClick={() => setDropdownOpen((v) => !v)}
-              title={user?.email}
-            >
-              {initial}
-            </div>
-            {dropdownOpen && (
-              <>
-                <div
-                  style={{ position: 'fixed', inset: 0, zIndex: 199 }}
-                  onClick={() => setDropdownOpen(false)}
-                />
-                <div className="user-dropdown">
-                  <div
-                    className="user-dropdown-item"
-                    style={{ color: 'var(--text-muted)', cursor: 'default', fontSize: 12 }}
-                  >
-                    {user?.email}
-                  </div>
-                  <div className="user-dropdown-divider" />
-                  <button className="user-dropdown-item danger" onClick={signOut}>
-                    Sign out
-                  </button>
-                </div>
-              </>
+        {crumb && (
+          <div className="topbar-crumb">
+            <span>/</span>
+            {tripHref ? (
+              <Link to={tripHref} className="topbar-crumb-link">
+                {crumb}
+              </Link>
+            ) : (
+              <span>{crumb}</span>
             )}
           </div>
+        )}
+      </div>
+
+      <div className="topbar-right">
+        <div className="avatar-menu">
+          <button
+            className="avatar-button"
+            onClick={() => setDropdownOpen((value) => !value)}
+            title={user?.email}
+          >
+            {initial}
+          </button>
+
+          {dropdownOpen && (
+            <>
+              <button
+                className="menu-backdrop"
+                onClick={() => setDropdownOpen(false)}
+                aria-label="Close account menu"
+              />
+              <div className="account-menu">
+                <div className="account-menu-text">{user?.email}</div>
+                <div className="account-menu-divider" />
+                <button className="account-menu-action danger" onClick={signOut}>
+                  Sign out
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </nav>

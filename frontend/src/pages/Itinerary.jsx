@@ -1,594 +1,1040 @@
-import { useState, useEffect, useRef } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import L from 'leaflet';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import CategoryIcon from '../components/CategoryIcon';
 import { supabase } from '../lib/supabase';
-import { useAuth } from '../context/AuthContext';
 import { useNav } from '../context/NavContext';
-
-/* ── Helpers ── */
-const CAT_LABELS = {
-  restaurant: 'Food', attraction: 'Sight', hotel: 'Hotel',
-  activity: 'Activity', transport: 'Transport', other: 'Other',
-};
-const CAT_CLASS = {
-  restaurant: 'cat-food', attraction: 'cat-attraction',
-  hotel: 'cat-hotel', activity: 'cat-activity',
-  transport: 'cat-transport', other: 'cat-other',
-};
-
-function catLabel(c) { return CAT_LABELS[c] ?? c; }
-function catClass(c) { return CAT_CLASS[c] ?? 'cat-other'; }
-
-function haversine(lat1, lng1, lat2, lng2) {
-  const R = 6371, d2r = Math.PI / 180;
-  const dLat = (lat2 - lat1) * d2r, dLng = (lng2 - lng1) * d2r;
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * d2r) * Math.cos(lat2 * d2r) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function totalKm(stops) {
-  let d = 0;
-  for (let i = 1; i < stops.length; i++) {
-    const a = stops[i - 1], b = stops[i];
-    if (a.lat && a.lng && b.lat && b.lng) d += haversine(a.lat, a.lng, b.lat, b.lng);
-  }
-  return Math.round(d);
-}
-
-function getDayDate(startDate, day) {
-  if (!startDate) return null;
-  const d = new Date(startDate);
-  d.setDate(d.getDate() + (day - 1));
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-}
-
-function createPinIcon(n, active = false) {
-  return L.divIcon({
-    html: `<div class="map-pin${active ? ' active' : ''}">${n}</div>`,
-    className: '',
-    iconSize: [26, 26],
-    iconAnchor: [13, 13],
-    popupAnchor: [0, -16],
-  });
-}
+import {
+  categoryLabel,
+  createNumberedPin,
+  getCategoryMeta,
+  getDayDate,
+  totalKm,
+} from '../lib/tripPresentation';
 
 function MapFit({ stops }) {
   const map = useMap();
-  const prev = useRef('');
+  const previousKey = useRef('');
+
   useEffect(() => {
-    const pts = stops.filter((s) => s.lat && s.lng);
-    if (!pts.length) return;
-    const key = pts.map((s) => `${s.lat},${s.lng}`).join('|');
-    if (key === prev.current) return;
-    prev.current = key;
-    if (pts.length === 1) {
-      map.setView([pts[0].lat, pts[0].lng], 14);
-    } else {
-      map.fitBounds(L.latLngBounds(pts.map((s) => [s.lat, s.lng])), { padding: [60, 60] });
+    const points = stops.filter((stop) => stop.lat && stop.lng);
+    if (!points.length) return;
+
+    const nextKey = points.map((stop) => `${stop.lat},${stop.lng}`).join('|');
+    if (nextKey === previousKey.current) return;
+    previousKey.current = nextKey;
+
+    if (points.length === 1) {
+      map.setView([points[0].lat, points[0].lng], 14);
+      return;
     }
-  }, [stops, map]);
+
+    map.fitBounds(
+      points.map((stop) => [stop.lat, stop.lng]),
+      { padding: [64, 64] }
+    );
+  }, [map, stops]);
+
   return null;
 }
 
-/* ── Share Modal ── */
 function ShareModal({ tripId, onClose }) {
-  const [email, setEmail]       = useState('');
-  const [collabs, setCollabs]   = useState([]);
-  const [error, setError]       = useState('');
-  const [loading, setLoading]   = useState(false);
+  const [email, setEmail] = useState('');
+  const [collaborators, setCollaborators] = useState([]);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    supabase.from('trip_collaborators').select('*').eq('trip_id', tripId)
-      .then(({ data }) => setCollabs(data ?? []));
+    supabase
+      .from('trip_collaborators')
+      .select('*')
+      .eq('trip_id', tripId)
+      .then(({ data }) => setCollaborators(data ?? []));
   }, [tripId]);
 
   async function invite() {
     if (!email.trim()) return;
     setLoading(true);
     setError('');
+
     try {
-      const { error: err } = await supabase.from('trip_collaborators').insert({
+      const { error: inviteError } = await supabase.from('trip_collaborators').insert({
         trip_id: tripId,
         user_id: email.trim(),
         role: 'editor',
       });
-      if (err) throw err;
+
+      if (inviteError) throw inviteError;
+
       setEmail('');
-      const { data } = await supabase.from('trip_collaborators').select('*').eq('trip_id', tripId);
-      setCollabs(data ?? []);
-    } catch (e) {
-      setError(e.message);
+      const { data } = await supabase
+        .from('trip_collaborators')
+        .select('*')
+        .eq('trip_id', tripId);
+      setCollaborators(data ?? []);
+    } catch (inviteFailure) {
+      setError(inviteFailure.message);
     } finally {
       setLoading(false);
     }
   }
 
-  async function remove(id) {
-    await supabase.from('trip_collaborators').delete().eq('id', id);
-    setCollabs((v) => v.filter((c) => c.id !== id));
+  async function remove(collaboratorId) {
+    await supabase.from('trip_collaborators').delete().eq('id', collaboratorId);
+    setCollaborators((current) =>
+      current.filter((collaborator) => collaborator.id !== collaboratorId)
+    );
   }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">Share trip</h2>
-        <p className="modal-sub">Invite collaborators by user ID or email.</p>
+      <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+        <div className="panel-header-row">
+          <div>
+            <div className="panel-title">Share trip</div>
+            <p className="section-copy">Invite collaborators by email or user ID.</p>
+          </div>
+          <button className="shell-btn shell-btn-ghost shell-btn-sm" onClick={onClose}>
+            Close
+          </button>
+        </div>
 
-        {error && <div className="error-banner">{error}</div>}
+        {error && <div className="banner banner-error">{error}</div>}
 
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="share-row">
           <input
             className="form-input"
             placeholder="Email or user ID"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && invite()}
+            onChange={(event) => setEmail(event.target.value)}
+            onKeyDown={(event) => event.key === 'Enter' && invite()}
           />
-          <button className="btn-primary btn-sm" onClick={invite} disabled={loading}>
+          <button className="shell-btn shell-btn-sm" onClick={invite} disabled={loading}>
             Invite
           </button>
         </div>
 
-        {collabs.length > 0 && (
-          <div className="collab-list">
-            {collabs.map((c) => (
-              <div key={c.id} className="collab-item">
-                <div className="collab-item-avatar" style={{ background: '#7C3AED' }}>
-                  {c.user_id[0].toUpperCase()}
+        {collaborators.length > 0 && (
+          <div className="share-list">
+            {collaborators.map((collaborator) => (
+              <div key={collaborator.id} className="share-item">
+                <div className="share-avatar">{collaborator.user_id[0].toUpperCase()}</div>
+                <div className="share-copy">
+                  <div className="share-name">{collaborator.user_id}</div>
+                  <div className="share-role">{collaborator.role}</div>
                 </div>
-                <div className="collab-item-info">
-                  <div className="collab-item-name">{c.user_id}</div>
-                  <div className="collab-item-role">{c.role}</div>
-                </div>
-                <button className="btn-icon danger" onClick={() => remove(c.id)}>×</button>
+                <button
+                  className="shell-btn shell-btn-ghost shell-btn-sm danger"
+                  onClick={() => remove(collaborator.id)}
+                >
+                  Remove
+                </button>
               </div>
             ))}
           </div>
         )}
-
-        <div className="modal-footer">
-          <button className="btn-secondary btn-sm" onClick={onClose}>Close</button>
-        </div>
       </div>
     </div>
   );
 }
 
-/* ── Edit Stop Form ── */
+function parseStopTimeRange(value) {
+  const text = (value || '').trim();
+  if (!text) return { start: '', end: '' };
+
+  const fromToMatch = text.match(/from\s+(.+?)\s+to\s+(.+)/i);
+  if (fromToMatch) {
+    return { start: fromToMatch[1].trim(), end: fromToMatch[2].trim() };
+  }
+
+  const separatorMatch = text.split(/\s*[–-]\s*/);
+  if (separatorMatch.length === 2) {
+    return { start: separatorMatch[0].trim(), end: separatorMatch[1].trim() };
+  }
+
+  return { start: text, end: '' };
+}
+
+function formatStopTimeRange(start, end) {
+  const cleanStart = (start || '').trim();
+  const cleanEnd = (end || '').trim();
+  if (!cleanStart && !cleanEnd) return null;
+  if (!cleanStart) return cleanEnd;
+  if (!cleanEnd) return cleanStart;
+  return `${cleanStart} - ${cleanEnd}`;
+}
+
 function EditStopForm({ stop, onChange, onSave, onCancel }) {
   return (
-    <div className="edit-stop-form" onClick={(e) => e.stopPropagation()}>
-      <input
-        className="form-input"
-        style={{ fontSize: 12, padding: '6px 10px' }}
-        value={stop.name}
-        onChange={(e) => onChange({ ...stop, name: e.target.value })}
-        placeholder="Stop name"
-        autoFocus
-      />
-      <input
-        className="form-input"
-        style={{ fontSize: 12, padding: '6px 10px' }}
-        value={stop.address ?? ''}
-        onChange={(e) => onChange({ ...stop, address: e.target.value })}
-        placeholder="Address"
-      />
-      <div style={{ display: 'flex', gap: 6 }}>
-        <input
-          className="form-input"
-          style={{ fontSize: 12, padding: '6px 10px', maxWidth: 80 }}
-          value={stop.stop_time ?? ''}
-          onChange={(e) => onChange({ ...stop, stop_time: e.target.value })}
-          placeholder="Time"
-        />
-        <input
-          className="form-input"
-          style={{ fontSize: 12, padding: '6px 10px' }}
+    <div className="edit-stop-form" onClick={(event) => event.stopPropagation()}>
+      <div className="edit-stop-static">
+        <div className="edit-stop-static-name">{stop.name}</div>
+        {stop.address && <div className="edit-stop-static-address">{stop.address}</div>}
+      </div>
+      <div className="edit-stop-field">
+        <div className="edit-stop-label">Time</div>
+        <div className="form-grid two-up">
+          <input
+            className="form-input"
+            type="time"
+            value={stop.stopTimeStart ?? ''}
+            onChange={(event) => onChange({ ...stop, stopTimeStart: event.target.value })}
+            autoFocus
+          />
+          <input
+            className="form-input"
+            type="time"
+            value={stop.stopTimeEnd ?? ''}
+            onChange={(event) => onChange({ ...stop, stopTimeEnd: event.target.value })}
+          />
+        </div>
+      </div>
+      <div className="edit-stop-field">
+        <div className="edit-stop-label">Notes</div>
+        <textarea
+          className="notes-field notes-field-inline"
           value={stop.notes ?? ''}
-          onChange={(e) => onChange({ ...stop, notes: e.target.value })}
-          placeholder="Notes"
+          onChange={(event) => onChange({ ...stop, notes: event.target.value })}
+          placeholder="Add notes"
         />
       </div>
       <div className="edit-stop-actions">
-        <button className="btn-primary btn-sm" onClick={onSave}>Save</button>
-        <button className="btn-secondary btn-sm" onClick={onCancel}>Cancel</button>
+        <button className="shell-btn shell-btn-sm" onClick={onSave}>
+          Save
+        </button>
+        <button className="shell-btn shell-btn-ghost shell-btn-sm" onClick={onCancel}>
+          Cancel
+        </button>
       </div>
     </div>
   );
 }
 
-const STATUS_OPTIONS = ['draft', 'upcoming', 'current', 'past'];
-
 export default function Itinerary() {
-  const { id }     = useParams();
-  const navigate   = useNavigate();
-  const { user }   = useAuth();
-  const { setTripName, setOnShare } = useNav();
+  const { id } = useParams();
+  const { setTripName, setTripHref, setOnShare } = useNav();
+  const markerRefs = useRef({});
+  const composerAbortRef = useRef(null);
 
-  const [trip,        setTrip]        = useState(null);
-  const [stops,       setStops]       = useState([]);
-  const [activeStop,  setActiveStop]  = useState(null);
-  const [loading,     setLoading]     = useState(true);
-  const [reprompt,    setReprompt]    = useState('');
-  const [reprompting, setReprompting] = useState(false);
+  const [trip, setTrip] = useState(null);
+  const [stops, setStops] = useState([]);
+  const [activeStop, setActiveStop] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [editingStop, setEditingStop] = useState(null);
   const [expandedDays, setExpandedDays] = useState(new Set());
-  const [shareOpen,   setShareOpen]   = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [composerText, setComposerText] = useState('');
+  const [composerDay, setComposerDay] = useState(1);
+  const [composerLoading, setComposerLoading] = useState(false);
+  const [composerError, setComposerError] = useState('');
+  const [composerResults, setComposerResults] = useState([]);
+  const [composerSelected, setComposerSelected] = useState(0);
+  const [composerSearching, setComposerSearching] = useState(false);
+  const [draggingStopId, setDraggingStopId] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
 
-  useEffect(() => { fetchData(); }, [id]);
+  useEffect(() => {
+    let ignore = false;
 
-  async function fetchData() {
-    const [{ data: tripData }, { data: stopsData }] = await Promise.all([
-      supabase.from('trips').select('*').eq('id', id).single(),
-      supabase.from('stops').select('*').eq('trip_id', id).order('day').order('position'),
-    ]);
-    setTrip(tripData);
-    if (tripData?.name) {
-      setTripName(tripData.name);
-      setOnShare(() => () => setShareOpen(true));
+    async function loadTrip() {
+      setLoading(true);
+
+      const [{ data: tripData }, { data: stopsData }] = await Promise.all([
+        supabase.from('trips').select('*').eq('id', id).single(),
+        supabase.from('stops').select('*').eq('trip_id', id).order('day').order('position'),
+      ]);
+
+      if (ignore) return;
+
+      setTrip(tripData);
+
+      if (tripData?.name) {
+        setTripName(tripData.name);
+        setTripHref(`/trip/${tripData.id}`);
+        setOnShare(() => () => setShareOpen(true));
+      }
+
+      const loadedStops = stopsData ?? [];
+      setStops(loadedStops);
+
+      if (loadedStops.length > 0) {
+        const days = [...new Set(loadedStops.map((stop) => stop.day ?? 1))].sort((a, b) => a - b);
+        setExpandedDays(new Set([days[0]]));
+        setComposerDay(days[0]);
+      } else {
+        setExpandedDays(new Set());
+        setComposerDay(1);
+      }
+
+      setLoading(false);
     }
-    const loaded = stopsData ?? [];
-    setStops(loaded);
-    /* Expand first day by default */
-    if (loaded.length > 0) {
-      const days = [...new Set(loaded.map((s) => s.day ?? 1))].sort((a, b) => a - b);
-      setExpandedDays(new Set([days[0]]));
-    }
-    setLoading(false);
-  }
 
-  async function updateStatus(status) {
-    await supabase.from('trips').update({ status }).eq('id', id);
-    setTrip((t) => ({ ...t, status }));
-  }
+    loadTrip();
+
+    return () => {
+      ignore = true;
+    };
+  }, [id, setOnShare, setTripHref, setTripName]);
+
+  useEffect(() => () => {
+    setTripName('');
+    setTripHref('');
+    setOnShare(null);
+  }, [setOnShare, setTripHref, setTripName]);
+
+  useEffect(() => {
+    Object.entries(markerRefs.current).forEach(([stopId, marker]) => {
+      if (!marker) return;
+
+      if (String(stopId) === String(activeStop)) {
+        marker.openPopup();
+      } else {
+        marker.closePopup();
+      }
+    });
+  }, [activeStop]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(markerRefs.current).forEach((marker) => {
+        marker?.closePopup();
+      });
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!composerOpen) {
+      setComposerResults([]);
+      setComposerSelected(0);
+      setComposerSearching(false);
+      if (composerAbortRef.current) {
+        composerAbortRef.current.abort();
+      }
+      return undefined;
+    }
+
+    const query = composerText.trim();
+    if (!query) {
+      setComposerResults([]);
+      setComposerSelected(0);
+      setComposerSearching(false);
+      if (composerAbortRef.current) {
+        composerAbortRef.current.abort();
+      }
+      return undefined;
+    }
+
+    if (composerAbortRef.current) {
+      composerAbortRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    composerAbortRef.current = controller;
+    setComposerSearching(true);
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `/api/place-search?q=${encodeURIComponent(query)}&destination=${encodeURIComponent(trip?.destination || '')}`,
+          { signal: controller.signal }
+        );
+        const data = await response.json();
+        if (controller.signal.aborted) return;
+        setComposerResults(data.places ?? []);
+        setComposerSelected(0);
+      } catch (fetchError) {
+        if (fetchError.name === 'AbortError') return;
+        setComposerResults([]);
+      } finally {
+        if (!controller.signal.aborted) {
+          setComposerSearching(false);
+        }
+      }
+    }, 200);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [composerOpen, composerText, trip?.destination]);
 
   async function deleteStop(stopId) {
     await supabase.from('stops').delete().eq('id', stopId);
-    setStops((prev) => prev.filter((s) => s.id !== stopId));
+    setStops((current) => current.filter((stop) => stop.id !== stopId));
     if (activeStop === stopId) setActiveStop(null);
   }
 
   async function saveEdit(stop) {
     const { data, error } = await supabase
       .from('stops')
-      .update({ name: stop.name, address: stop.address, notes: stop.notes, stop_time: stop.stop_time, day: stop.day })
+      .update({
+        notes: stop.notes,
+        stop_time: formatStopTimeRange(stop.stopTimeStart, stop.stopTimeEnd),
+      })
       .eq('id', stop.id)
       .select()
       .single();
-    if (!error && data) setStops((prev) => prev.map((s) => (s.id === stop.id ? data : s)));
+
+    if (!error && data) {
+      setStops((current) => current.map((item) => (item.id === stop.id ? data : item)));
+    }
+
     setEditingStop(null);
   }
 
-  async function handleReprompt() {
-    if (!reprompt.trim()) return;
-    setReprompting(true);
+  async function handleAddStop() {
+    if (!composerText.trim()) return;
+    setComposerLoading(true);
+    setComposerError('');
+
     try {
-      const res = await fetch('/api/suggest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: reprompt, stops, tripName: trip?.name, destination: trip?.destination }),
-      });
-      const data = await res.json();
-      if (data.stops?.length > 0) {
-        const { data: newStops } = await supabase.from('stops').insert(
-          data.stops.map((s, i) => ({
-            trip_id:          id,
-            name:             s.name,
-            address:          s.address ?? null,
-            day:              s.day ?? 1,
-            position:         stops.length + i,
-            notes:            s.notes ?? null,
-            category:         s.category ?? 'other',
-            lat:              s.lat ?? null,
-            lng:              s.lng ?? null,
-            stop_time:        s.stop_time ?? null,
-            duration_minutes: s.duration_minutes ?? null,
-          }))
-        ).select();
-        if (newStops) setStops((prev) => [...prev, ...newStops]);
+      const chosenPlace = composerResults[composerSelected] ?? null;
+      const stopToInsert = chosenPlace
+        ? {
+            name: chosenPlace.name,
+            address: chosenPlace.address ?? null,
+            day: composerDay,
+            notes: chosenPlace.description || null,
+            category: chosenPlace.category ?? 'other',
+            lat: chosenPlace.lat ?? null,
+            lng: chosenPlace.lng ?? null,
+            stop_time: null,
+            duration_minutes: null,
+          }
+        : {
+            name: composerText.trim(),
+            address: trip?.destination ?? null,
+            day: composerDay,
+            notes: null,
+            category: 'other',
+            lat: null,
+            lng: null,
+            stop_time: null,
+            duration_minutes: null,
+          };
+
+      await insertStop(stopToInsert);
+
+      setComposerText('');
+      setComposerOpen(false);
+      setComposerResults([]);
+      setComposerSelected(0);
+    } catch (requestError) {
+      setComposerError(requestError.message || 'Unable to add a stop right now.');
+    } finally {
+      setComposerLoading(false);
+    }
+  }
+
+  async function insertStop(stopToInsert) {
+    const nextPosition = stops.length;
+    const { data: newStop, error } = await supabase
+      .from('stops')
+      .insert({
+        trip_id: id,
+        name: stopToInsert.name,
+        address: stopToInsert.address,
+        day: stopToInsert.day,
+        position: nextPosition,
+        notes: stopToInsert.notes,
+        category: stopToInsert.category,
+        lat: stopToInsert.lat,
+        lng: stopToInsert.lng,
+        stop_time: stopToInsert.stop_time,
+        duration_minutes: stopToInsert.duration_minutes,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    if (newStop) {
+      setStops((current) => [...current, newStop]);
+      setExpandedDays((current) => new Set([...current, composerDay]));
+    }
+  }
+
+  async function moveStop(stopId, targetDay, targetIndex) {
+    const movingStop = stops.find((stop) => stop.id === stopId);
+    if (!movingStop) return;
+
+    const previousStops = stops;
+    const dayOrder = [...new Set([...stops.map((stop) => stop.day ?? 1), targetDay])].sort((a, b) => a - b);
+    const sourceDayStops = stops.filter((stop) => (stop.day ?? 1) === (movingStop.day ?? 1));
+    const sourceIndex = sourceDayStops.findIndex((stop) => stop.id === stopId);
+    const remainingStops = stops.filter((stop) => stop.id !== stopId);
+
+    let normalizedTargetIndex = targetIndex;
+    if ((movingStop.day ?? 1) === targetDay && sourceIndex > -1 && sourceIndex < targetIndex) {
+      normalizedTargetIndex -= 1;
+    }
+
+    const nextStops = [];
+
+    dayOrder.forEach((day) => {
+      const dayStops = remainingStops
+        .filter((stop) => (stop.day ?? 1) === day)
+        .sort((left, right) => (left.position ?? 0) - (right.position ?? 0));
+
+      if (day === targetDay) {
+        const insertAt = Math.max(0, Math.min(normalizedTargetIndex, dayStops.length));
+        dayStops.splice(insertAt, 0, { ...movingStop, day: targetDay });
       }
-    } catch { /* silently fail */ }
-    finally { setReprompting(false); setReprompt(''); }
+
+      dayStops.forEach((stop, index) => {
+        nextStops.push({
+          ...stop,
+          day,
+          position: index,
+        });
+      });
+    });
+
+    setStops(nextStops);
+    setExpandedDays((current) => new Set([...current, targetDay]));
+    if (editingStop?.id === stopId) {
+      setEditingStop((current) => (current ? { ...current, day: targetDay } : current));
+    }
+
+    try {
+      await Promise.all(
+        nextStops.map((stop) =>
+          supabase
+            .from('stops')
+            .update({ day: stop.day, position: stop.position })
+            .eq('id', stop.id)
+        )
+      );
+    } catch {
+      setStops(previousStops);
+    } finally {
+      setDraggingStopId(null);
+      setDropTarget(null);
+    }
+  }
+
+  function beginDrag(stopId) {
+    setDraggingStopId(stopId);
+    setDropTarget(null);
+    if (activeStop === stopId) {
+      setActiveStop(null);
+    }
+  }
+
+  function allowDrop(event, day, index) {
+    event.preventDefault();
+    if (!draggingStopId) return;
+    setDropTarget({ day, index });
+  }
+
+  function allowDropOnCard(event, day, index) {
+    event.preventDefault();
+    if (!draggingStopId) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const offset = event.clientY - bounds.top;
+    const targetIndex = offset > bounds.height / 2 ? index + 1 : index;
+    setDropTarget({ day, index: targetIndex });
+  }
+
+  function handleDrop(event, day, index) {
+    event.preventDefault();
+    if (!draggingStopId) return;
+    moveStop(draggingStopId, day, index);
   }
 
   function toggleDay(day) {
-    setExpandedDays((prev) => {
-      const next = new Set(prev);
-      next.has(day) ? next.delete(day) : next.add(day);
+    setExpandedDays((current) => {
+      const next = new Set(current);
+      if (next.has(day)) next.delete(day);
+      else next.add(day);
       return next;
     });
   }
 
-  const days = [...new Set(stops.map((s) => s.day ?? 1))].sort((a, b) => a - b);
-  const activeStopObj = stops.find((s) => s.id === activeStop);
+  const days = [...new Set(stops.map((stop) => stop.day ?? 1))].sort((a, b) => a - b);
+  const visibleDays = days.length > 0 ? days : [1];
+  const activeStopObject = stops.find((stop) => stop.id === activeStop);
 
   if (loading) return <div className="loading-state">Loading itinerary…</div>;
+
   if (!trip) {
     return (
-      <div className="empty-state" style={{ paddingTop: 80 }}>
-        <div style={{ fontSize: 40, marginBottom: 16 }}>⚠️</div>
+      <div className="empty-state">
+        <div className="empty-state-icon">!</div>
         <h3>Trip not found</h3>
         <p>This trip may have been deleted.</p>
-        <Link to="/" className="btn-primary" style={{ marginTop: 16 }}>Back to My Trips</Link>
+        <Link to="/trips" className="shell-btn">
+          Back to Trips
+        </Link>
       </div>
     );
   }
 
-  const globalIdx = (stop) => stops.indexOf(stop) + 1;
+  const globalIndex = (stop) => stops.indexOf(stop) + 1;
+  const activeIndex = activeStopObject ? stops.indexOf(activeStopObject) : -1;
+
+  function goToPreviousStop() {
+    if (activeIndex > 0) setActiveStop(stops[activeIndex - 1].id);
+  }
+
+  function goToNextStop() {
+    if (activeIndex > -1 && activeIndex < stops.length - 1) {
+      setActiveStop(stops[activeIndex + 1].id);
+    }
+  }
 
   return (
     <>
       {shareOpen && <ShareModal tripId={id} onClose={() => setShareOpen(false)} />}
 
-      <div className="itinerary-layout">
-        {/* ── Sidebar ── */}
-        <aside className="itinerary-sidebar">
-          <div className="itin-sidebar-header">
-            <div className="itin-header-row">
-              <div>
-                <h2 className="itin-title">Itinerary</h2>
-                <p className="itin-meta">
-                  {stops.length} stop{stops.length !== 1 ? 's' : ''}
-                  {stops.some((s) => s.lat && s.lng) ? ` · ${totalKm(stops)} km` : ''}
-                  {trip.start_date ? ` · ${new Date(trip.start_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
-                  {trip.end_date   ? ` – ${new Date(trip.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
-                </p>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                <button className="itin-add-btn" onClick={() => setReprompt('Add a stop')}>
-                  + Add stop
-                </button>
-                <select
-                  style={{ fontSize: 11, padding: '3px 6px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--surface)', color: 'var(--text-muted)' }}
-                  value={trip.status}
-                  onChange={(e) => updateStatus(e.target.value)}
-                >
-                  {STATUS_OPTIONS.map((s) => (
-                    <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-                  ))}
-                </select>
-              </div>
+      <div className="shell-page itinerary-page">
+        <aside className="detail-rail">
+          <div className="detail-rail-header">
+            <div className="detail-rail-titleblock">
+              <h1 className="section-title">Itinerary</h1>
+              <p className="detail-rail-meta">
+                {stops.length} stop{stops.length !== 1 ? 's' : ''}
+                {stops.some((stop) => stop.lat && stop.lng) ? ` · ${totalKm(stops)} km` : ''}
+                {trip.start_date ? ` · ${new Date(trip.start_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
+                {trip.end_date ? ` – ${new Date(trip.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
+              </p>
+            </div>
+            <div className="detail-rail-actions">
+              <button
+                className={`shell-btn shell-btn-sm itinerary-add-btn ${composerOpen ? 'is-active' : ''}`}
+                onClick={() => {
+                  setComposerOpen((current) => !current);
+                  setComposerDay(visibleDays[0]);
+                }}
+              >
+                + Add stop
+              </button>
             </div>
           </div>
 
-          {/* Day accordion */}
-          <div className="itin-sidebar-body">
+          {composerOpen && (
+            <div className="panel-card add-stop-panel">
+              <div className="panel-header-row">
+                <div className="panel-title">Add a stop</div>
+                <button
+                  className="composer-close"
+                  onClick={() => setComposerOpen(false)}
+                >
+                  esc to close
+                </button>
+              </div>
+
+              <input
+                className="form-input composer-input"
+                value={composerText}
+                onChange={(event) => setComposerText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setComposerSelected((current) =>
+                      Math.min(current + 1, Math.max(composerResults.length - 1, 0))
+                    );
+                  } else if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setComposerSelected((current) => Math.max(current - 1, 0));
+                  } else if (event.key === 'Enter') {
+                    handleAddStop();
+                  } else if (event.key === 'Escape') {
+                    setComposerOpen(false);
+                  }
+                }}
+              />
+
+              {composerText.trim() !== '' && (
+                <div className="composer-suggestions">
+                  {composerSearching ? (
+                    <div className="composer-suggestion muted">Searching…</div>
+                  ) : composerResults.length > 0 ? (
+                    composerResults.map((place, index) => {
+                      const category = getCategoryMeta(place.category);
+                      return (
+                        <button
+                          key={`${place.name}-${place.address}-${index}`}
+                          className={`composer-suggestion ${composerSelected === index ? 'active' : ''}`}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            setComposerSelected(index);
+                          }}
+                          onClick={async () => {
+                            setComposerSelected(index);
+                            setComposerLoading(true);
+                            setComposerError('');
+                            try {
+                              await insertStop({
+                                name: place.name,
+                                address: place.address ?? null,
+                                day: composerDay,
+                                notes: place.description || null,
+                                category: place.category ?? 'other',
+                                lat: place.lat ?? null,
+                                lng: place.lng ?? null,
+                                stop_time: null,
+                                duration_minutes: null,
+                              });
+                              setComposerText('');
+                              setComposerOpen(false);
+                              setComposerResults([]);
+                              setComposerSelected(0);
+                            } catch (requestError) {
+                              setComposerError(requestError.message || 'Unable to add a stop right now.');
+                            } finally {
+                              setComposerLoading(false);
+                            }
+                          }}
+                        >
+                          <CategoryIcon kind={category.icon} size={14} />
+                          <div className="composer-suggestion-copy">
+                            <div className="composer-suggestion-name">{place.name}</div>
+                            <div className="composer-suggestion-meta">
+                              {place.address}
+                              {place.rating ? ` · ★ ${place.rating}` : ''}
+                            </div>
+                          </div>
+                          {composerSelected === index && <span className="composer-suggestion-enter">↵</span>}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <>
+                      <div className="composer-suggestion active">
+                        <CategoryIcon kind="other" size={14} />
+                        <div className="composer-suggestion-copy">
+                          <div className="composer-suggestion-name">{composerText.trim()}</div>
+                          <div className="composer-suggestion-meta">Add as a custom stop</div>
+                        </div>
+                        <span className="composer-suggestion-enter">↵</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="chip-row">
+                <span className="panel-hint">Add to:</span>
+                {visibleDays.map((day) => (
+                  <button
+                    key={day}
+                    className={`tag ${composerDay === day ? 'tag-earth' : 'tag-outline'}`}
+                    onClick={() => setComposerDay(day)}
+                  >
+                    Day {day}
+                  </button>
+                ))}
+              </div>
+
+              {composerError && <div className="banner banner-error">{composerError}</div>}
+
+              <div className="composer-footer">
+                <span className="panel-hint">Or drop a pin on the map →</span>
+                <button
+                  className="shell-btn shell-btn-sm"
+                  onClick={handleAddStop}
+                  disabled={composerLoading || !composerText.trim()}
+                >
+                  {composerLoading ? 'Adding…' : 'Add with AI'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="day-list">
             {stops.length === 0 && (
-              <div style={{ textAlign: 'center', padding: '32px 16px', color: 'var(--text-muted)', fontSize: 13 }}>
+              <div className="empty-inline">
                 <p>No stops yet.</p>
-                <p>Use the AI bar below to add some!</p>
+                <p>Start with the add stop panel above.</p>
               </div>
             )}
 
-            {days.map((day) => {
-              const dayStops  = stops.filter((s) => (s.day ?? 1) === day);
-              const isOpen    = expandedDays.has(day);
-              const km        = totalKm(dayStops);
-              const dayDate   = getDayDate(trip.start_date, day);
+            {visibleDays.map((day) => {
+              const dayStops = stops.filter((stop) => (stop.day ?? 1) === day);
+              const isOpen = expandedDays.has(day) || dayStops.length === 0;
+              const dayDistance = totalKm(dayStops);
+              const dayDate = getDayDate(trip.start_date, day);
 
               return (
-                <div key={day} className="day-section">
-                  <div
-                    className="day-section-header"
+                <section key={day} className="day-group">
+                  <button
+                    className={`day-header ${
+                      draggingStopId && dropTarget?.day === day && dropTarget?.index === dayStops.length
+                        ? 'drag-over'
+                        : ''
+                    }`}
                     onClick={() => toggleDay(day)}
+                    onDragOver={(event) => allowDrop(event, day, dayStops.length)}
+                    onDrop={(event) => handleDrop(event, day, dayStops.length)}
                   >
-                    <div className="day-section-left">
-                      <span className="day-section-day">Day {day}</span>
-                      {dayDate && <span className="day-section-date">{dayDate}</span>}
+                    <div className="day-header-left">
+                      <span className="day-label">Day {day}</span>
+                      {dayDate && <span className="day-date">{dayDate}</span>}
                     </div>
-                    <div className="day-section-right">
-                      <span className="day-section-meta">
+                    <div className="day-header-right">
+                      <span className="day-meta">
                         {dayStops.length} stop{dayStops.length !== 1 ? 's' : ''}
-                        {km > 0 ? ` · ${km} km` : ''}
+                        {dayDistance > 0 ? ` · ${dayDistance} km` : ''}
                       </span>
-                      {!isOpen && <span style={{ fontSize: 11, color: 'var(--text-light)' }}>collapsed</span>}
-                      <span className={`day-section-chevron ${isOpen ? 'open' : ''}`}>▾</span>
+                      <span className={`day-chevron ${isOpen ? 'open' : ''}`}>▾</span>
                     </div>
-                  </div>
+                  </button>
 
                   {isOpen && (
-                    <div className="day-section-body">
-                      {dayStops.map((stop) => {
-                        const n = globalIdx(stop);
+                    <div className="day-body">
+                      {draggingStopId && (
+                        <div
+                          className={`stop-dropzone ${
+                            dropTarget?.day === day && dropTarget?.index === 0 ? 'active' : ''
+                          }`}
+                          onDragOver={(event) => allowDrop(event, day, 0)}
+                          onDrop={(event) => handleDrop(event, day, 0)}
+                        />
+                      )}
+
+                      {dayStops.map((stop, index) => {
+                        const category = getCategoryMeta(stop.category);
                         return (
-                          <div
-                            key={stop.id}
-                            className={`itin-stop ${activeStop === stop.id ? 'active' : ''}`}
-                            onClick={() => setActiveStop(stop.id === activeStop ? null : stop.id)}
-                          >
-                            <div className="itin-stop-num">{n}</div>
-                            <div className="itin-stop-content">
-                              {editingStop?.id === stop.id ? (
-                                <EditStopForm
-                                  stop={editingStop}
-                                  onChange={setEditingStop}
-                                  onSave={() => saveEdit(editingStop)}
-                                  onCancel={() => setEditingStop(null)}
-                                />
-                              ) : (
-                                <>
-                                  <div className="itin-stop-name-row">
-                                    <span className="itin-stop-name">{stop.name}</span>
-                                    {stop.stop_time && <span className="itin-stop-time">{stop.stop_time}</span>}
-                                  </div>
-                                  {stop.address && (
-                                    <div className="itin-stop-address">{stop.address}</div>
-                                  )}
-                                  {stop.notes && (
-                                    <div className="itin-stop-notes">{stop.notes}</div>
-                                  )}
-                                  {stop.category && stop.category !== 'other' && (
-                                    <span className={`cat-tag ${catClass(stop.category)}`}>
-                                      {catLabel(stop.category)}
-                                    </span>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                            {editingStop?.id !== stop.id && (
-                              <button
-                                className="itin-stop-menu"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setEditingStop({ ...stop });
+                          <div key={stop.id}>
+                            <article
+                              className={`stop-card ${activeStop === stop.id ? 'active' : ''} ${
+                                draggingStopId === stop.id ? 'dragging' : ''
+                              }`}
+                              onClick={() => setActiveStop(stop.id === activeStop ? null : stop.id)}
+                              draggable={editingStop?.id !== stop.id}
+                              onDragStart={(event) => {
+                                event.dataTransfer.effectAllowed = 'move';
+                                event.dataTransfer.setData('text/plain', String(stop.id));
+                                beginDrag(stop.id);
+                              }}
+                              onDragEnd={() => {
+                                setDraggingStopId(null);
+                                setDropTarget(null);
+                              }}
+                              onDragOver={(event) => allowDropOnCard(event, day, index)}
+                              onDrop={(event) => {
+                                if (!dropTarget) return;
+                                handleDrop(event, dropTarget.day, dropTarget.index);
+                              }}
+                            >
+                              <div className="stop-index">{globalIndex(stop)}</div>
+
+                              <div className="stop-copy">
+                                {editingStop?.id === stop.id ? (
+                                  <EditStopForm
+                                    stop={editingStop}
+                                    onChange={setEditingStop}
+                                    onSave={() => saveEdit(editingStop)}
+                                    onCancel={() => setEditingStop(null)}
+                                  />
+                                ) : (
+                                  <>
+                                    <div className="stop-topline">
+                                      <div className="stop-name">{stop.name}</div>
+                                      {stop.stop_time && <div className="stop-time">{stop.stop_time}</div>}
+                                    </div>
+                                    {stop.address && <div className="stop-subtitle">{stop.address}</div>}
+                                    {stop.notes && <div className="stop-notes">{stop.notes}</div>}
+                                    {stop.category && stop.category !== 'other' && (
+                                      <span className={`tag tag-${category.tone}`}>
+                                        <CategoryIcon kind={category.icon} size={11} />
+                                        <span>{categoryLabel(stop.category)}</span>
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+
+                              {editingStop?.id !== stop.id && (
+                                <button
+                                className="stop-menu"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  const { start, end } = parseStopTimeRange(stop.stop_time);
+                                  setEditingStop({
+                                    ...stop,
+                                    stopTimeStart: start,
+                                    stopTimeEnd: end,
+                                  });
                                 }}
                                 title="Edit stop"
                               >
-                                ···
-                              </button>
+                                  ⋯
+                                </button>
+                              )}
+                            </article>
+
+                            {draggingStopId && (
+                              <div
+                                className={`stop-dropzone ${
+                                  dropTarget?.day === day && dropTarget?.index === index + 1 ? 'active' : ''
+                                }`}
+                                onDragOver={(event) => allowDrop(event, day, index + 1)}
+                                onDrop={(event) => handleDrop(event, day, index + 1)}
+                              />
                             )}
                           </div>
                         );
                       })}
 
                       <button
-                        className="day-add-stop"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setReprompt(`Add a stop to Day ${day}`);
+                        className="empty-dropzone"
+                        onClick={() => {
+                          setComposerOpen(true);
+                          setComposerDay(day);
                         }}
                       >
                         + Add stop
                       </button>
                     </div>
                   )}
-                </div>
+                </section>
               );
             })}
           </div>
-
-          {/* Reprompt bar */}
-          <div className="itin-reprompt">
-            <input
-              className="itin-reprompt-input"
-              placeholder='e.g. "Add a coffee stop on Day 1"'
-              value={reprompt}
-              onChange={(e) => setReprompt(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleReprompt()}
-            />
-            <button
-              className="btn-primary btn-sm"
-              onClick={handleReprompt}
-              disabled={reprompting || !reprompt.trim()}
-              title="AI suggest"
-            >
-              {reprompting ? '…' : '✨'}
-            </button>
-          </div>
         </aside>
 
-        {/* ── Map ── */}
-        <div className="itinerary-map">
-          {stops.some((s) => s.lat && s.lng) ? (
-            <MapContainer
-              center={[37.7749, -122.4194]}
-              zoom={12}
-              style={{ height: '100%', width: '100%' }}
-            >
+        <section className="map-stage">
+          {stops.some((stop) => stop.lat && stop.lng) ? (
+            <MapContainer center={[37.7749, -122.4194]} zoom={12} className="full-map">
               <TileLayer
-                url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-                attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/">CARTO</a>'
+                url="https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png"
+                attribution='© <a href="https://www.stadiamaps.com/" target="_blank" rel="noreferrer">Stadia Maps</a> © <a href="https://openmaptiles.org/" target="_blank" rel="noreferrer">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               />
               <MapFit stops={stops} />
-              {stops.map((stop, i) =>
+              {stops.map((stop, index) =>
                 stop.lat && stop.lng ? (
                   <Marker
                     key={stop.id}
+                    ref={(instance) => {
+                      if (instance) markerRefs.current[stop.id] = instance;
+                      else delete markerRefs.current[stop.id];
+                    }}
                     position={[stop.lat, stop.lng]}
-                    icon={createPinIcon(i + 1, activeStop === stop.id)}
-                    eventHandlers={{ click: () => setActiveStop(stop.id === activeStop ? null : stop.id) }}
+                    icon={createNumberedPin(index + 1, { active: activeStop === stop.id })}
+                    eventHandlers={{
+                      click: () => setActiveStop(stop.id),
+                      popupclose: () => {
+                        setActiveStop((current) => (current === stop.id ? null : current));
+                      },
+                    }}
                   >
-                    <Popup>
-                      <strong>{stop.name}</strong>
-                      {stop.address && <><br /><span style={{ color: '#6B7280', fontSize: 12 }}>{stop.address}</span></>}
+                    <Popup
+                      className="stop-detail-popup"
+                      closeButton={false}
+                      autoPan
+                      autoClose={false}
+                      closeOnClick={false}
+                      offset={[0, -18]}
+                    >
+                      <div className="stop-popup-card">
+                        <div className="stop-popup-media" />
+                        <div className="stop-popup-body">
+                          <div className="stop-popup-top">
+                            <div>
+                              <div className="stop-popup-kicker">
+                                Stop {globalIndex(stop)} · Day {stop.day ?? 1}
+                              </div>
+                              <div className="stop-popup-title">{stop.name}</div>
+                              {stop.address && (
+                                <div className="stop-popup-subtitle">{stop.address}</div>
+                              )}
+                            </div>
+                            <button
+                              className="shell-btn shell-btn-ghost shell-btn-sm stop-popup-close"
+                              onClick={() => setActiveStop(null)}
+                            >
+                              ×
+                            </button>
+                          </div>
+
+                          <div className="chip-row stop-popup-chips">
+                            {stop.category && stop.category !== 'other' && (
+                              <span className={`tag tag-${getCategoryMeta(stop.category).tone}`}>
+                                <CategoryIcon kind={getCategoryMeta(stop.category).icon} size={11} />
+                                <span>{categoryLabel(stop.category)}</span>
+                              </span>
+                            )}
+                            {stop.stop_time && (
+                              <span className="tag tag-outline">
+                                {stop.stop_time}
+                                {stop.duration_minutes
+                                  ? ` · ~${Math.round(stop.duration_minutes / 60)}h`
+                                  : ''}
+                              </span>
+                            )}
+                          </div>
+
+                          {stop.notes && <p className="stop-popup-notes">{stop.notes}</p>}
+
+                          <div className="stop-popup-actions">
+                            <button
+                              className="shell-btn shell-btn-sm shell-btn-secondary"
+                              onClick={() => {
+                                const { start, end } = parseStopTimeRange(stop.stop_time);
+                                setEditingStop({
+                                  ...stop,
+                                  stopTimeStart: start,
+                                  stopTimeEnd: end,
+                                });
+                                setActiveStop(null);
+                              }}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="shell-btn shell-btn-ghost shell-btn-sm"
+                              onClick={goToPreviousStop}
+                              disabled={activeIndex <= 0}
+                            >
+                              ◀
+                            </button>
+                            <button
+                              className="shell-btn shell-btn-ghost shell-btn-sm"
+                              onClick={goToNextStop}
+                              disabled={activeIndex >= stops.length - 1}
+                            >
+                              ▶
+                            </button>
+                            <button
+                              className="shell-btn shell-btn-ghost shell-btn-sm danger"
+                              onClick={() => deleteStop(stop.id)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </Popup>
                   </Marker>
                 ) : null
               )}
             </MapContainer>
           ) : (
-            <div style={{ height: '100%', background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 24 }}>
-                <div style={{ fontSize: 40, marginBottom: 16 }}>🗺️</div>
-                <h3 style={{ fontSize: 16, color: 'var(--text-2)', marginBottom: 8 }}>Map coming soon</h3>
-                <p style={{ fontSize: 13, lineHeight: 1.7 }}>
-                  Stop locations appear here once coordinates are added.<br />
-                  AI-parsed stops from well-known places include coordinates.
-                </p>
-              </div>
+            <div className="map-empty">
+              Stop locations appear here once coordinates are added.
             </div>
           )}
 
-          {/* Map popover for active stop */}
-          {activeStopObj && (
-            <div className="map-popover-wrap">
-              <div className="map-popover">
-                <div className="map-popover-inner">
-                  <div className="map-popover-label">
-                    <span>Stop {globalIdx(activeStopObj)} · Day {activeStopObj.day ?? 1}</span>
-                    <button className="map-popover-close" onClick={() => setActiveStop(null)}>×</button>
-                  </div>
-                  <div className="map-popover-name">{activeStopObj.name}</div>
-                  {activeStopObj.address && (
-                    <div className="map-popover-addr">{activeStopObj.address}</div>
-                  )}
-                  <div className="map-popover-tags">
-                    {activeStopObj.category && activeStopObj.category !== 'other' && (
-                      <span className={`cat-tag ${catClass(activeStopObj.category)}`}>
-                        {catLabel(activeStopObj.category)}
-                      </span>
-                    )}
-                    {activeStopObj.stop_time && (
-                      <span className="map-popover-time">
-                        {activeStopObj.stop_time}
-                        {activeStopObj.duration_minutes
-                          ? ` · ${Math.round(activeStopObj.duration_minutes / 60)}h`
-                          : ''}
-                      </span>
-                    )}
-                  </div>
-                  {activeStopObj.notes && (
-                    <div className="map-popover-notes">{activeStopObj.notes}</div>
-                  )}
-                </div>
-                <div className="map-popover-footer">
-                  <button
-                    className="btn-secondary btn-sm"
-                    onClick={() => { setEditingStop({ ...activeStopObj }); setActiveStop(null); }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="btn-text danger"
-                    style={{ fontSize: 13 }}
-                    onClick={() => deleteStop(activeStopObj.id)}
-                  >
-                    Delete
-                  </button>
-                  <div className="map-popover-nav">
-                    <button
-                      className="map-popover-nav-btn"
-                      onClick={() => {
-                        const i = stops.indexOf(activeStopObj);
-                        if (i > 0) setActiveStop(stops[i - 1].id);
-                      }}
-                    >◀</button>
-                    <button
-                      className="map-popover-nav-btn"
-                      onClick={() => {
-                        const i = stops.indexOf(activeStopObj);
-                        if (i < stops.length - 1) setActiveStop(stops[i + 1].id);
-                      }}
-                    >▶</button>
-                  </div>
-                </div>
-              </div>
+          {composerOpen && (
+            <div className="map-hint-card">
+              <CategoryIcon
+                kind={getCategoryMeta(composerResults[composerSelected]?.category ?? 'attraction').icon}
+                size={14}
+                color="var(--mother-earth)"
+              />
+              <span>
+                {(composerResults[composerSelected]?.name || composerText || 'Kiyomizu-dera')}
+                {' · '}
+                tap map to place
+              </span>
             </div>
           )}
-        </div>
+
+        </section>
       </div>
     </>
   );
