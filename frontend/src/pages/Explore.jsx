@@ -598,10 +598,10 @@ export default function Explore() {
 
       <section className="map-stage">
         {mapPoints.length > 0 ? (
-          <MapContainer center={[20, 0]} zoom={3} className="full-map">
-            <TileLayer
-              url="https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png"
-              attribution='© <a href="https://www.stadiamaps.com/" target="_blank" rel="noreferrer">Stadia Maps</a> © <a href="https://openmaptiles.org/" target="_blank" rel="noreferrer">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            <MapContainer center={[20, 0]} zoom={3} className="full-map">
+              <TileLayer
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             />
             <MapFit points={mapPoints} />
             <MapFocus place={activeObject} />

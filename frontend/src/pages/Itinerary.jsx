@@ -901,8 +901,8 @@ export default function Itinerary() {
           {stops.some((stop) => stop.lat && stop.lng) ? (
             <MapContainer center={[37.7749, -122.4194]} zoom={12} className="full-map">
               <TileLayer
-                url="https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png"
-                attribution='© <a href="https://www.stadiamaps.com/" target="_blank" rel="noreferrer">Stadia Maps</a> © <a href="https://openmaptiles.org/" target="_blank" rel="noreferrer">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
               />
               <MapFit stops={stops} />
               {stops.map((stop, index) =>

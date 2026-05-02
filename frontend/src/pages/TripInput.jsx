@@ -509,8 +509,8 @@ export default function TripInput() {
               {visibleStops.some((stop) => stop.lat && stop.lng) ? (
                 <MapContainer center={[20, 0]} zoom={2} zoomControl={false} className="full-map">
                   <TileLayer
-                    url="https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png"
-                    attribution='© <a href="https://www.stadiamaps.com/" target="_blank" rel="noreferrer">Stadia Maps</a> © <a href="https://openmaptiles.org/" target="_blank" rel="noreferrer">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                   />
                   <MapAutoFit stops={visibleStops} />
                   {visibleStops.map((stop, index) =>

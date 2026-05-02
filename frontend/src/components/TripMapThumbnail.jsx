@@ -59,8 +59,8 @@ export default function TripMapThumbnail({ stops }) {
         className="thumb-map-canvas"
       >
         <TileLayer
-          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-          attribution="© OpenStreetMap © CARTO"
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution="© OpenStreetMap contributors"
         />
         <AutoBounds stops={points} />
         {points.slice(0, 5).map((stop, index) => (
