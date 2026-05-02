@@ -509,8 +509,8 @@ export default function TripInput() {
               {visibleStops.some((stop) => stop.lat && stop.lng) ? (
                 <MapContainer center={[20, 0]} zoom={2} zoomControl={false} className="full-map">
                   <TileLayer
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                    attribution="© OpenStreetMap © CARTO"
                   />
                   <MapAutoFit stops={visibleStops} />
                   {visibleStops.map((stop, index) =>

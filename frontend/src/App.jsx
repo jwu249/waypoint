@@ -21,7 +21,7 @@ function AppRoutes() {
     return (
       <Routes location={location} key={`${pathname}${search}`}>
         <Route path="/" element={<Landing />} />
-        <Route path="/landing" element={<Landing />} />
+        <Route path="/landing" element={<Navigate to="/" replace />} />
         <Route path="/auth" element={<Auth />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -30,10 +30,10 @@ function AppRoutes() {
 
   return (
     <>
-      {pathname !== '/landing' && <Navbar tripName={tripName} tripHref={tripHref} onShare={onShare} />}
+      {pathname !== '/' && <Navbar tripName={tripName} tripHref={tripHref} onShare={onShare} />}
       <Routes location={location} key={`${pathname}${search}`}>
-        <Route path="/"         element={<Navigate to="/trips" replace />} />
-        <Route path="/landing"  element={<Landing />} />
+        <Route path="/"         element={<Landing />} />
+        <Route path="/landing"  element={<Navigate to="/" replace />} />
         <Route path="/trips"    element={<Library />} />
         <Route path="/new"      element={<TripInput />} />
         <Route path="/trip/:id" element={<Itinerary />} />

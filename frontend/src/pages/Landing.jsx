@@ -38,7 +38,7 @@ export default function Landing() {
       <header className="landing-topbar landing-reveal landing-reveal-quick is-visible">
         <button
           className="brand brand-button"
-          onClick={() => navigate('/landing', { state: { replay: Date.now() } })}
+          onClick={() => navigate('/', { state: { replay: Date.now() } })}
         >
           <BrandMark size={24} />
           <span>Waypoint</span>

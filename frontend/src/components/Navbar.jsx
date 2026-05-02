@@ -40,7 +40,7 @@ export default function Navbar({ tripName, tripHref }) {
       <div className="topbar-left">
         <button
           className="brand brand-button"
-          onClick={() => navigate('/landing', { state: { replay: Date.now() } })}
+          onClick={() => navigate('/', { state: { replay: Date.now() } })}
         >
           <BrandMark size={24} />
           <span>Waypoint</span>

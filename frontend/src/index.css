@@ -1235,7 +1235,8 @@ textarea {
   overflow: hidden;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: white;
+  background: linear-gradient(180deg, #fcfbf8 0%, #f3efe7 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
 }
 
 .parse-map-frame {
@@ -1657,6 +1658,7 @@ textarea {
   border: 0;
   border-radius: 0;
   background: transparent;
+  box-shadow: none;
 }
 
 .map-empty {
@@ -2654,7 +2656,8 @@ textarea {
   height: 120px;
   overflow: hidden;
   border-radius: 6px;
-  background: var(--bg-2);
+  background: linear-gradient(180deg, #f6f2ea 0%, #ece7de 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5);
 }
 
 .thumb-map-canvas {
@@ -2720,6 +2723,11 @@ textarea {
 
 .leaflet-container {
   font-family: var(--sans);
+  background: #f4f0e8;
+}
+
+.leaflet-tile-pane {
+  filter: saturate(0.82) contrast(0.94) brightness(1.02);
 }
 
 .leaflet-popup-content-wrapper,
