@@ -154,7 +154,7 @@ export default function Explore() {
     if (!destination) return;
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
-    const nextStops = stops || tripStops;
+    const nextStops = stops || [];
     setLoading(true);
 
     try {
@@ -193,7 +193,7 @@ export default function Explore() {
         setLoading(false);
       }
     }
-  }, [tripStops]);
+  }, []);
 
   useEffect(() => {
     let ignore = false;
