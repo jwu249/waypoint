@@ -8,6 +8,7 @@ import TripInput from './pages/TripInput';
 import Itinerary from './pages/Itinerary';
 import Explore from './pages/Explore';
 import Auth from './pages/Auth';
+import Analytics from './pages/Analytics';
 
 function AppRoutes() {
   const { user, loading } = useAuth();
@@ -38,6 +39,7 @@ function AppRoutes() {
         <Route path="/new"      element={<TripInput />} />
         <Route path="/trip/:id" element={<Itinerary />} />
         <Route path="/explore"  element={<Explore />} />
+        <Route path="/analytics" element={<Analytics />} />
         <Route path="*"         element={<Navigate to="/trips" replace />} />
       </Routes>
     </>

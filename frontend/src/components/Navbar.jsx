@@ -21,6 +21,7 @@ export default function Navbar({ tripName, tripHref }) {
   const isTrip = pathname.startsWith('/trip/');
   const isNew = pathname === '/new';
   const isExplore = pathname === '/explore';
+  const isAnalytics = pathname === '/analytics';
 
   const crumb = isTrip
     ? (tripName || 'Trip')
@@ -49,6 +50,9 @@ export default function Navbar({ tripName, tripHref }) {
         <div className="topbar-nav">
           <Link to="/trips" className={`topbar-link ${pathname === '/trips' ? 'active' : ''}`}>
             Trips
+          </Link>
+          <Link to="/analytics" className={`topbar-link ${isAnalytics ? 'active' : ''}`}>
+            Analytics
           </Link>
           <Link to={exploreHref} className={`topbar-link ${isExplore ? 'active' : ''}`}>
             Explore
