@@ -34,98 +34,10 @@ const INTEREST_OPTIONS = [
   { label: 'Adventure', tone: 'earth' },
 ];
 
-const MOCK_AI_OVERVIEW = {
-  total: 1284,
-  successRate: 96.2,
-  averageLatency: 127,
-};
-
-const MOCK_AI_BREAKDOWN = [
-  { kind: 'parse', tone: 'earth', total: 842, successRate: 97.1, averageLatency: 182 },
-  { kind: 'suggest', tone: 'bay', total: 312, successRate: 94.8, averageLatency: 94 },
-  { kind: 'explore', tone: 'blue', total: 130, successRate: 95.4, averageLatency: 71 },
-];
-
-const MOCK_AI_LOGS = [
-  {
-    id: 'req_9u6sr855',
-    kind: 'parse',
-    ok: true,
-    latencyMs: 172,
-    inputLength: 387,
-    createdAt: '2026-05-04T14:32:08-05:00',
-  },
-  {
-    id: 'req_g6mb2cdy',
-    kind: 'suggest',
-    ok: true,
-    latencyMs: 88,
-    inputLength: 42,
-    createdAt: '2026-05-04T14:31:50-05:00',
-  },
-  {
-    id: 'req_rihqy2we',
-    kind: 'parse',
-    ok: true,
-    latencyMs: 201,
-    inputLength: 512,
-    createdAt: '2026-05-04T14:30:22-05:00',
-  },
-  {
-    id: 'req_avksse8r',
-    kind: 'explore',
-    ok: true,
-    latencyMs: 64,
-    inputLength: 18,
-    createdAt: '2026-05-04T14:29:11-05:00',
-  },
-  {
-    id: 'req_j852itfo',
-    kind: 'parse',
-    ok: false,
-    latencyMs: 2840,
-    inputLength: 1240,
-    createdAt: '2026-05-04T14:27:48-05:00',
-  },
-  {
-    id: 'req_fyfcm6wl',
-    kind: 'suggest',
-    ok: true,
-    latencyMs: 103,
-    inputLength: 55,
-    createdAt: '2026-05-04T14:26:03-05:00',
-  },
-  {
-    id: 'req_okj3owtn',
-    kind: 'parse',
-    ok: true,
-    latencyMs: 158,
-    inputLength: 298,
-    createdAt: '2026-05-04T14:24:37-05:00',
-  },
-  {
-    id: 'req_8209piwt',
-    kind: 'explore',
-    ok: true,
-    latencyMs: 69,
-    inputLength: 24,
-    createdAt: '2026-05-04T14:22:19-05:00',
-  },
-];
-
-const TABLE_PAGE_SIZE = 8;
-
 const FULL_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
   year: 'numeric',
-});
-
-const TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hour12: false,
 });
 
 function toDate(value) {
@@ -169,11 +81,6 @@ function formatWholeNumber(value) {
 function formatRate(value) {
   if (!Number.isFinite(value)) return '0.0%';
   return `${value.toFixed(1)}%`;
-}
-
-function formatLatency(value) {
-  if (!Number.isFinite(value) || value <= 0) return '—';
-  return `${Math.round(value)} ms`;
 }
 
 function formatDelta(value) {
@@ -247,18 +154,10 @@ function downloadCsv(filename, content) {
   window.URL.revokeObjectURL(url);
 }
 
-function requestTypeTone(kind) {
-  if (kind === 'parse') return 'earth';
-  if (kind === 'suggest') return 'bay';
-  return 'blue';
-}
-
 export default function Analytics() {
   const { user } = useAuth();
   const { setTripName, setTripHref, setOnShare } = useNav();
   const [range, setRange] = useState('30d');
-  const [requestFilter, setRequestFilter] = useState('all');
-  const [requestPage, setRequestPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [trips, setTrips] = useState([]);
@@ -349,7 +248,6 @@ export default function Analytics() {
   const filteredTripIds = new Set(filteredTrips.map((trip) => trip.id));
   const filteredStops = stops.filter((stop) => filteredTripIds.has(stop.trip_id));
   const filteredCollaborators = collaborators.filter((item) => filteredTripIds.has(item.trip_id));
-  const aiLogsForDisplay = MOCK_AI_LOGS;
 
   const stopGroups = {};
   filteredStops.forEach((stop) => {
@@ -419,24 +317,6 @@ export default function Analytics() {
 
   const avgStopsPerTrip = filteredTrips.length > 0 ? filteredStops.length / filteredTrips.length : 0;
   const avgTripSpan = spanTripCount > 0 ? spanTotalDays / spanTripCount : 0;
-  const aiSuccessRate = MOCK_AI_OVERVIEW.successRate;
-  const aiAverageLatency = MOCK_AI_OVERVIEW.averageLatency;
-  const aiBreakdown = MOCK_AI_BREAKDOWN;
-
-  const recentAiLogs = [...aiLogsForDisplay].sort(
-    (left, right) => new Date(right.createdAt) - new Date(left.createdAt)
-  );
-  const visibleAiLogs =
-    requestFilter === 'errors'
-      ? recentAiLogs.filter((entry) => !entry.ok)
-      : recentAiLogs;
-  const pageCount = Math.max(1, Math.ceil(visibleAiLogs.length / TABLE_PAGE_SIZE));
-  const currentPage = Math.min(requestPage, pageCount - 1);
-  const pagedAiLogs = visibleAiLogs.slice(
-    currentPage * TABLE_PAGE_SIZE,
-    currentPage * TABLE_PAGE_SIZE + TABLE_PAGE_SIZE
-  );
-  const showingCount = currentPage * TABLE_PAGE_SIZE + pagedAiLogs.length;
 
   const tripsCreatedThisWeek = ownedTrips.filter((trip) => isInRange(trip.created_at, weekCutoff)).length;
   const stopsCreatedThisWeek = stops.filter(
@@ -578,10 +458,7 @@ export default function Analytics() {
                 <button
                   key={option.id}
                   className={`analytics-range-button ${range === option.id ? 'active' : ''}`}
-                  onClick={() => {
-                    setRange(option.id);
-                    setRequestPage(0);
-                  }}
+                  onClick={() => setRange(option.id)}
                   aria-pressed={range === option.id}
                 >
                   {option.label}
@@ -716,137 +593,6 @@ export default function Analytics() {
             )}
           </article>
 
-          <article className="panel-card analytics-panel">
-            <div className="panel-header-row analytics-panel-header">
-              <div>
-                <h2 className="section-title">AI requests</h2>
-                <p className="section-copy">All AI calls · {rangeWindowLabel}</p>
-              </div>
-            </div>
-
-            <div className="analytics-ai-total-list">
-              <div className="analytics-ai-total-row">
-                <span className="analytics-ai-total-label">Total AI requests</span>
-                <span className="analytics-ai-total-value">
-                  {formatNumber(MOCK_AI_OVERVIEW.total)}
-                </span>
-              </div>
-              <div className="analytics-ai-total-row">
-                <span className="analytics-ai-total-label">Success rate</span>
-                <span className="analytics-ai-total-value">{formatRate(aiSuccessRate)}</span>
-              </div>
-              <div className="analytics-ai-total-row">
-                <span className="analytics-ai-total-label">Avg. latency</span>
-                <span className="analytics-ai-total-value">{formatLatency(aiAverageLatency)}</span>
-              </div>
-            </div>
-
-            <div className="analytics-ai-breakdown-head sidebar-label">By request type</div>
-            <div className="analytics-ai-breakdown-list">
-              {aiBreakdown.map((entry) => (
-                <div key={entry.kind} className="analytics-ai-breakdown-row">
-                  <span className={`tag tag-${entry.tone} analytics-request-chip`}>{entry.kind}</span>
-                  <div className="analytics-ai-breakdown-metrics">
-                    <span className="analytics-table-mono">{formatNumber(entry.total)}</span>
-                    <span>{formatRate(entry.successRate)} ok</span>
-                    <span>{formatLatency(entry.averageLatency)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </article>
-        </section>
-
-        <section className="analytics-section">
-          <article className="panel-card analytics-panel analytics-table-panel">
-            <div className="panel-header-row analytics-panel-header analytics-table-header">
-              <div>
-                <h2 className="section-title">Recent AI requests</h2>
-              </div>
-              <div className="analytics-table-actions">
-                <button
-                  className={`analytics-table-filter ${requestFilter === 'all' ? 'active' : ''}`}
-                  onClick={() => {
-                    setRequestFilter('all');
-                    setRequestPage(0);
-                  }}
-                >
-                  All
-                </button>
-                <button
-                  className={`analytics-table-filter ${requestFilter === 'errors' ? 'active' : ''}`}
-                  onClick={() => {
-                    setRequestFilter('errors');
-                    setRequestPage(0);
-                  }}
-                >
-                  Errors only
-                </button>
-              </div>
-            </div>
-
-            <div className="analytics-table-wrap">
-              <div className="analytics-table analytics-table-head">
-                <div>Time</div>
-                <div>Type</div>
-                <div>Status</div>
-                <div>Latency</div>
-                <div>Input len.</div>
-                <div>ID</div>
-              </div>
-
-              {pagedAiLogs.length === 0 ? (
-                <div className="empty-inline analytics-empty-inline">
-                  <p>No AI request logs yet.</p>
-                  <p>Run trip parsing or explore suggestions to start filling this table.</p>
-                </div>
-              ) : (
-                pagedAiLogs.map((entry) => (
-                  <div key={entry.id} className="analytics-table analytics-table-row">
-                    <div className="analytics-table-mono">
-                      {toDate(entry.createdAt) ? TIME_FORMATTER.format(toDate(entry.createdAt)) : '—'}
-                    </div>
-                    <div>
-                      <span className={`tag tag-${requestTypeTone(entry.kind)} analytics-request-chip`}>
-                        {entry.kind}
-                      </span>
-                    </div>
-                    <div>
-                      <span className={`analytics-request-status ${entry.ok ? 'ok' : 'error'}`}>
-                        <span className="analytics-request-status-dot" />
-                        <span>{entry.ok ? 'success' : 'error'}</span>
-                      </span>
-                    </div>
-                    <div className="analytics-table-mono">{formatLatency(entry.latencyMs)}</div>
-                    <div className="analytics-table-mono">{formatNumber(entry.inputLength)} chars</div>
-                    <div className="analytics-table-mono analytics-request-id">{entry.id}</div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="analytics-table-footer">
-              <span className="panel-hint">
-                Showing {showingCount} of {formatNumber(visibleAiLogs.length)}
-              </span>
-              <div className="analytics-table-pagination">
-                <button
-                  className="analytics-table-page"
-                  onClick={() => setRequestPage((page) => Math.max(0, page - 1))}
-                  disabled={currentPage === 0}
-                >
-                  ← Prev
-                </button>
-                <button
-                  className="analytics-table-page analytics-table-page-primary"
-                  onClick={() => setRequestPage((page) => Math.min(pageCount - 1, page + 1))}
-                  disabled={currentPage >= pageCount - 1}
-                >
-                  Next →
-                </button>
-              </div>
-            </div>
-          </article>
         </section>
       </main>
     </div>
