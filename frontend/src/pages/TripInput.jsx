@@ -214,6 +214,10 @@ export default function TripInput() {
   const [saving, setSaving] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [openOptionalSection, setOpenOptionalSection] = useState('');
+  const [importUrl, setImportUrl] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState('');
+  const [importSuccess, setImportSuccess] = useState('');
 
   useEffect(() => {
     const seed = location.state?.seedTripTemplate;
@@ -299,6 +303,67 @@ export default function TripInput() {
       controller.abort();
     };
   }, [destination]);
+
+  async function handleImportUrl() {
+    if (!importUrl.trim() || importLoading) return;
+    setImportLoading(true);
+    setImportError('');
+    setImportSuccess('');
+
+    try {
+      const response = await fetch('/api/import-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: importUrl.trim(),
+          destination: destination || '',
+          tripName: tripName || '',
+        }),
+      });
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+
+      const importedStops = data.stops || [];
+      if (importedStops.length === 0) {
+        setImportError(data.warning || 'No stops could be extracted from this URL.');
+        return;
+      }
+
+      const stopLines = importedStops
+        .map((s) => `${s.name}${s.address ? ` (${s.address})` : ''}${s.notes ? ` — ${s.notes}` : ''}`)
+        .join('\n');
+
+      setRawText((current) => {
+        const prefix = current.trim();
+        return prefix ? `${prefix}\n\n--- Imported from URL ---\n${stopLines}` : stopLines;
+      });
+
+      setImportSuccess(`Imported ${importedStops.length} stops from URL.`);
+      setImportUrl('');
+      setTimeout(() => setImportSuccess(''), 5000);
+    } catch (err) {
+      setImportError(err.message || 'Failed to import from URL.');
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  function handleFileUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result || '';
+      setRawText((current) => {
+        const prefix = current.trim();
+        return prefix ? `${prefix}\n\n--- Imported from ${file.name} ---\n${text}` : text;
+      });
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  }
 
   function toggleInterest(interest) {
     setInterests((current) =>
@@ -894,9 +959,40 @@ need to fit a coffee at % arabica somewhere.`}
               <span>·</span>
               <span>est. {estimatedStops || 0} stops</span>
               <div className="notes-footer-actions">
-                <span className="tag tag-outline">Paste email</span>
-                <span className="tag tag-outline">Upload .txt</span>
+                <label className="tag tag-outline import-file-label">
+                  Upload file
+                  <input
+                    type="file"
+                    accept=".txt,.md,.csv,.json"
+                    className="import-file-input"
+                    onChange={handleFileUpload}
+                  />
+                </label>
               </div>
+            </div>
+          </div>
+
+          <div className="panel-card import-url-panel">
+            <div className="panel-title">Import from URL</div>
+            <p className="section-copy">Paste a blog post, TripAdvisor list, or travel article URL.</p>
+            {importError && <div className="banner banner-error">{importError}</div>}
+            {importSuccess && <div className="banner banner-warning">{importSuccess}</div>}
+            <div className="import-url-row">
+              <input
+                className="form-input"
+                placeholder="https://example.com/travel-guide"
+                value={importUrl}
+                onChange={(e) => setImportUrl(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleImportUrl(); }}
+                disabled={importLoading}
+              />
+              <button
+                className="shell-btn shell-btn-sm"
+                onClick={handleImportUrl}
+                disabled={importLoading || !importUrl.trim()}
+              >
+                {importLoading ? 'Importing…' : 'Import'}
+              </button>
             </div>
           </div>
         </section>

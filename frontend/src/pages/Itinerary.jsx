@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import AIChatPanel from '../components/AIChatPanel';
 import CategoryIcon from '../components/CategoryIcon';
 import TripExplorePanel from '../components/TripExplorePanel';
 import { searchPlaces } from '../lib/placeSearch';
@@ -555,6 +556,9 @@ export default function Itinerary() {
   const [dateDraft, setDateDraft] = useState({ startDate: '', endDate: '' });
   const [dateSaving, setDateSaving] = useState(false);
   const [dateError, setDateError] = useState('');
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
+  const [optimizeSummary, setOptimizeSummary] = useState('');
   const highestStopDay = stops.reduce((max, stop) => Math.max(max, stop.day ?? 1), 1);
   const tripDayCount = getTripDayCount(trip?.start_date, trip?.end_date);
   const visibleDayCount = Math.max(tripDayCount ?? 0, highestStopDay, 1);
@@ -1010,6 +1014,115 @@ export default function Itinerary() {
     });
   }
 
+  async function handleCopilotActions(actions) {
+    for (const action of actions) {
+      if (action.type === 'add' && action.stop) {
+        try {
+          await insertStop({
+            name: action.stop.name,
+            address: action.stop.address ?? null,
+            day: action.stop.day ?? 1,
+            notes: action.stop.notes ?? null,
+            category: action.stop.category ?? 'other',
+            lat: action.stop.lat ?? null,
+            lng: action.stop.lng ?? null,
+            stop_time: action.stop.stop_time ?? null,
+            duration_minutes: action.stop.duration_minutes ?? null,
+          });
+        } catch { /* ignore individual failures */ }
+      } else if (action.type === 'remove' && action.name) {
+        const match = stops.find((s) => s.name.toLowerCase() === action.name.toLowerCase());
+        if (match) await deleteStop(match.id);
+      } else if (action.type === 'edit' && action.name && action.updates) {
+        const match = stops.find((s) => s.name.toLowerCase() === action.name.toLowerCase());
+        if (match) {
+          const updates = {};
+          if (action.updates.notes !== undefined) updates.notes = action.updates.notes;
+          if (action.updates.stop_time !== undefined) updates.stop_time = action.updates.stop_time;
+          if (action.updates.day !== undefined) updates.day = action.updates.day;
+          if (Object.keys(updates).length > 0) {
+            const { data } = await supabase
+              .from('stops')
+              .update(updates)
+              .eq('id', match.id)
+              .select()
+              .single();
+            if (data) {
+              setStops((current) => sortStopsByDayAndPosition(
+                current.map((item) => (item.id === match.id ? data : item))
+              ));
+            }
+          }
+        }
+      }
+    }
+  }
+
+  async function handleOptimize() {
+    if (optimizing || stops.length < 2) return;
+    setOptimizing(true);
+    setOptimizeSummary('');
+
+    try {
+      const response = await fetch('/api/optimize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          destination: trip?.destination || '',
+          tripName: trip?.name || '',
+          startDate: trip?.start_date || '',
+          endDate: trip?.end_date || '',
+          stops: stops.map((s) => ({
+            id: s.id, name: s.name, day: s.day, category: s.category,
+            address: s.address, lat: s.lat, lng: s.lng,
+            stop_time: s.stop_time, duration_minutes: s.duration_minutes,
+            notes: s.notes, position: s.position,
+          })),
+        }),
+      });
+
+      const data = await response.json();
+      const optimized = data.stops || [];
+
+      if (optimized.length > 0) {
+        const updates = optimized.map((opt, idx) => ({
+          id: opt.id,
+          day: opt.day ?? 1,
+          position: opt.position ?? idx,
+          stop_time: opt.stop_time ?? null,
+        }));
+
+        await Promise.all(
+          updates.filter((u) => u.id).map((u) =>
+            supabase.from('stops').update({
+              day: u.day, position: u.position, stop_time: u.stop_time,
+            }).eq('id', u.id)
+          )
+        );
+
+        const idToUpdate = {};
+        updates.forEach((u) => { if (u.id) idToUpdate[u.id] = u; });
+        setStops((current) => sortStopsByDayAndPosition(
+          current.map((s) => {
+            const u = idToUpdate[s.id];
+            return u ? { ...s, day: u.day, position: u.position, stop_time: u.stop_time } : s;
+          })
+        ));
+
+        const allDays = [...new Set(updates.map((u) => u.day))];
+        setExpandedDays(new Set(allDays));
+      }
+
+      setOptimizeSummary(data.summary || 'Itinerary optimized.');
+      setTimeout(() => setOptimizeSummary(''), 6000);
+    } catch {
+      setOptimizeSummary('Optimization failed. Please try again.');
+      setTimeout(() => setOptimizeSummary(''), 4000);
+    } finally {
+      setOptimizing(false);
+    }
+  }
+
   if (loading) return <div className="loading-state">Loading itinerary…</div>;
 
   if (!trip) {
@@ -1076,14 +1189,39 @@ export default function Itinerary() {
             <div className="detail-rail-actions">
               <button
                 className={`shell-btn shell-btn-sm itinerary-add-btn ${composerOpen ? 'is-active' : ''}`}
-                onClick={() => {
-                  openComposer(visibleDays[0]);
-                }}
+                onClick={() => openComposer(visibleDays[0])}
               >
                 + Add stop
               </button>
+              <button
+                className={`shell-btn shell-btn-sm shell-btn-secondary ${optimizing ? 'is-active' : ''}`}
+                onClick={handleOptimize}
+                disabled={optimizing || stops.length < 2}
+                title="Optimize stop order by proximity and timing"
+              >
+                {optimizing ? 'Optimizing…' : '⚡ Optimize'}
+              </button>
+              <button
+                className={`shell-btn shell-btn-sm shell-btn-secondary ${copilotOpen ? 'is-active' : ''}`}
+                onClick={() => setCopilotOpen((v) => !v)}
+              >
+                ✦ AI Copilot
+              </button>
             </div>
           </div>
+
+          {optimizeSummary && (
+            <div className="banner banner-warning optimize-banner">{optimizeSummary}</div>
+          )}
+
+          {copilotOpen && (
+            <AIChatPanel
+              trip={trip}
+              stops={stops}
+              onApplyActions={handleCopilotActions}
+              onClose={() => setCopilotOpen(false)}
+            />
+          )}
 
           <div className="day-list">
             <AddStopComposer

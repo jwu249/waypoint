@@ -1,4 +1,5 @@
 import os
+import re
 import json
 from datetime import date
 from concurrent.futures import ThreadPoolExecutor
@@ -563,5 +564,227 @@ def explore_places():
     return jsonify({'places': places})
 
 
+@app.route('/api/chat', methods=['POST'])
+def chat_itinerary():
+    """Conversational AI copilot for editing an itinerary."""
+    data = request.get_json() or {}
+    message = data.get('message', '').strip()
+    destination = data.get('destination', '').strip()
+    stops = data.get('stops', [])
+    trip_name = data.get('tripName', '')
+    history = data.get('history', [])
+
+    if not message:
+        return jsonify({'error': 'No message provided'}), 400
+
+    current = json.dumps([
+        {'name': s.get('name', ''), 'day': s.get('day', 1), 'category': s.get('category', 'other'),
+         'address': s.get('address', ''), 'stop_time': s.get('stop_time'),
+         'notes': s.get('notes', '')}
+        for s in stops
+    ], indent=1)
+
+    system_prompt = (
+        'You are an AI trip planning copilot embedded in an itinerary editor. '
+        'The user has an itinerary and is asking you to help modify or improve it. '
+        'You can suggest adding, removing, reordering, or editing stops. '
+        'When suggesting changes, return valid JSON with an "actions" array. '
+        'Each action is one of:\n'
+        '  {"type":"add","stop":{"name":"...","address":"...","day":N,"category":"...","notes":"...","stop_time":"HH:MM" or null,"duration_minutes":N or null}}\n'
+        '  {"type":"remove","name":"exact stop name to remove"}\n'
+        '  {"type":"reorder","day":N,"order":["stop name 1","stop name 2",...]}\n'
+        '  {"type":"edit","name":"exact stop name","updates":{"notes":"...","stop_time":"...","day":N}}\n'
+        'Also include a "reply" field with a friendly natural language response to the user. '
+        'If the user is just asking a question (not requesting changes), return empty actions and just the reply. '
+        'Return only valid JSON with "reply" (string) and "actions" (array).'
+    )
+
+    messages = [
+        {'role': 'system', 'content': system_prompt},
+        {'role': 'user', 'content': (
+            f'Trip: {trip_name}\nDestination: {destination}\n'
+            f'Current itinerary:\n{current}\n\n'
+        )},
+    ]
+    for entry in history[-6:]:
+        messages.append({'role': entry.get('role', 'user'), 'content': entry.get('content', '')})
+    messages.append({'role': 'user', 'content': message})
+
+    try:
+        content = groq_chat_completion(
+            messages=messages,
+            response_format={'type': 'json_object'},
+            temperature=0.3,
+            max_tokens=2048,
+        )
+    except RuntimeError as e:
+        return jsonify({'reply': str(e), 'actions': []})
+
+    try:
+        result = parse_json_object(content)
+    except RuntimeError:
+        return jsonify({'reply': content, 'actions': []})
+
+    actions = result.get('actions', [])
+    for action in actions:
+        if action.get('type') == 'add' and action.get('stop'):
+            stop = action['stop']
+            lat, lng = geocode_stop(
+                stop.get('name', ''), stop.get('address', ''),
+                destination, *geocode_destination(destination),
+            )
+            stop['lat'] = lat
+            stop['lng'] = lng
+
+    return jsonify({
+        'reply': result.get('reply', ''),
+        'actions': actions,
+    })
+
+
+@app.route('/api/optimize', methods=['POST'])
+def optimize_itinerary():
+    """Optimize stop order by proximity, meal timing, and opening hours."""
+    data = request.get_json() or {}
+    destination = data.get('destination', '').strip()
+    stops = data.get('stops', [])
+    trip_name = data.get('tripName', '')
+    start_date = data.get('startDate', '')
+    end_date = data.get('endDate', '')
+
+    if not stops:
+        return jsonify({'stops': [], 'summary': 'No stops to optimize.'})
+
+    current = json.dumps([
+        {'name': s.get('name', ''), 'day': s.get('day', 1), 'category': s.get('category', 'other'),
+         'address': s.get('address', ''), 'lat': s.get('lat'), 'lng': s.get('lng'),
+         'stop_time': s.get('stop_time'), 'duration_minutes': s.get('duration_minutes'),
+         'notes': s.get('notes', '')}
+        for s in stops
+    ], indent=1)
+
+    system_prompt = (
+        'You are a trip schedule optimizer. Given a list of stops with coordinates, '
+        'reorder them to create the most efficient and enjoyable itinerary. Consider:\n'
+        '1. Geographic proximity — minimize travel between consecutive stops each day\n'
+        '2. Meal timing — restaurants/cafes near breakfast, lunch, dinner times\n'
+        '3. Logical flow — start days with outdoor/morning activities, end with dinner/evening\n'
+        '4. Category grouping — keep nearby attractions together\n\n'
+        'Return valid JSON with:\n'
+        '  "stops": array of ALL the same stops but reordered, each with updated "day", "position" (0-indexed within day), '
+        'and "stop_time" (suggested time as "HH:MM" or null). Keep all original fields intact.\n'
+        '  "summary": a brief 1-2 sentence explanation of what you changed and why.\n'
+        'Do NOT add or remove any stops. Return only valid JSON.'
+    )
+
+    try:
+        content = groq_chat_completion(
+            messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': (
+                    f'Trip: {trip_name}\nDestination: {destination}\n'
+                    f'Dates: {start_date} to {end_date}\n\n'
+                    f'Stops to optimize:\n{current}'
+                )},
+            ],
+            response_format={'type': 'json_object'},
+            temperature=0.2,
+            max_tokens=3000,
+        )
+    except RuntimeError as e:
+        return jsonify({'stops': stops, 'summary': f'Optimization unavailable: {e}'})
+
+    try:
+        result = parse_json_object(content)
+    except RuntimeError as e:
+        return jsonify({'stops': stops, 'summary': f'Could not parse result: {e}'})
+
+    optimized = result.get('stops', stops)
+    name_to_original = {s.get('name', '').lower(): s for s in stops}
+    merged = []
+    for opt in optimized:
+        original = name_to_original.get(opt.get('name', '').lower(), {})
+        merged_stop = {**original, **opt}
+        if original.get('lat') is not None:
+            merged_stop['lat'] = original['lat']
+        if original.get('lng') is not None:
+            merged_stop['lng'] = original['lng']
+        if original.get('id'):
+            merged_stop['id'] = original['id']
+        merged.append(merged_stop)
+
+    return jsonify({
+        'stops': merged,
+        'summary': result.get('summary', 'Itinerary optimized.'),
+    })
+
+
+@app.route('/api/import-url', methods=['POST'])
+def import_from_url():
+    """Import trip stops from a URL (blog post, article, etc.)."""
+    data = request.get_json() or {}
+    url = data.get('url', '').strip()
+    destination = data.get('destination', '').strip()
+    trip_name = data.get('tripName', '')
+
+    if not url:
+        return jsonify({'error': 'No URL provided'}), 400
+
+    try:
+        resp = http_requests.get(url, headers={
+            'User-Agent': 'Waypoint/1.0 (travel itinerary importer)',
+        }, timeout=12)
+        resp.raise_for_status()
+        html = resp.text[:12000]
+    except Exception as e:
+        return jsonify({'stops': [], 'warning': f'Could not fetch URL: {e}'})
+
+    text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    text = text[:6000]
+
+    system_prompt = (
+        'You are a trip planning assistant. Extract all places, stops, and activities '
+        'from the following web page content. Return valid JSON with a "stops" array. '
+        'Each stop must have: "name", "address" (include city/country), '
+        '"day" (integer, infer from context or 1), "notes", '
+        '"category" (one of: restaurant, attraction, hotel, activity, transport, other), '
+        '"stop_time" (24h format or null), "duration_minutes" (integer or null). '
+        'Do NOT include lat or lng. Return only valid JSON.'
+    )
+
+    try:
+        content = groq_chat_completion(
+            messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': (
+                    f'Trip: {trip_name}\nDestination: {destination}\n'
+                    f'Source URL: {url}\n\n'
+                    f'Page content:\n{text}'
+                )},
+            ],
+            response_format={'type': 'json_object'},
+            temperature=0.2,
+            max_tokens=2048,
+        )
+    except RuntimeError as e:
+        return jsonify({'stops': [], 'warning': str(e)})
+
+    try:
+        result = parse_json_object(content)
+    except RuntimeError as e:
+        return jsonify({'stops': [], 'warning': str(e)})
+
+    raw_stops = result.get('stops', [])
+    if not isinstance(raw_stops, list):
+        raw_stops = []
+    stops_out = normalize_and_clamp_stops(raw_stops)
+    stops_out = geocode_stops(stops_out, destination or trip_name)
+
+    return jsonify({'stops': stops_out, 'warning': result.get('warning')})
+
+
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    app.run(debug=True, port=5001, use_reloader=False)
