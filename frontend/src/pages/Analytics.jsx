@@ -161,6 +161,11 @@ function formatAverage(value) {
   return value.toFixed(1);
 }
 
+function formatWholeNumber(value) {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  return String(Math.round(value));
+}
+
 function formatRate(value) {
   if (!Number.isFinite(value)) return '0.0%';
   return `${value.toFixed(1)}%`;
@@ -340,7 +345,7 @@ export default function Analytics() {
     draft: ownedTrips.filter((trip) => analyticsTripStatus(trip) === 'draft').length,
   };
 
-  const filteredTrips = trips.filter((trip) => isInRange(trip.created_at, cutoff));
+  const filteredTrips = ownedTrips.filter((trip) => isInRange(trip.created_at, cutoff));
   const filteredTripIds = new Set(filteredTrips.map((trip) => trip.id));
   const filteredStops = stops.filter((stop) => filteredTripIds.has(stop.trip_id));
   const filteredCollaborators = collaborators.filter((item) => filteredTripIds.has(item.trip_id));
@@ -361,7 +366,6 @@ export default function Analytics() {
       { label: interest.label, tone: interest.tone, count: 0 },
     ])
   );
-  const uniqueContributors = new Set();
 
   filteredTrips.forEach((trip) => {
     const status = analyticsTripStatus(trip);
@@ -373,13 +377,10 @@ export default function Analytics() {
       }
       interestCounts[interest].count += 1;
     });
-
-    if (trip.user_id) uniqueContributors.add(trip.user_id);
   });
 
   filteredCollaborators.forEach((item) => {
     collaboratorCountByTrip[item.trip_id] = (collaboratorCountByTrip[item.trip_id] ?? 0) + 1;
-    if (item.user_id) uniqueContributors.add(item.user_id);
   });
 
   let totalDistanceKm = 0;
@@ -416,10 +417,8 @@ export default function Analytics() {
     }
   });
 
-  const sharedTripCount = Object.keys(collaboratorCountByTrip).length;
   const avgStopsPerTrip = filteredTrips.length > 0 ? filteredStops.length / filteredTrips.length : 0;
   const avgTripSpan = spanTripCount > 0 ? spanTotalDays / spanTripCount : 0;
-  const totalUsers = uniqueContributors.size;
   const aiSuccessRate = MOCK_AI_OVERVIEW.successRate;
   const aiAverageLatency = MOCK_AI_OVERVIEW.averageLatency;
   const aiBreakdown = MOCK_AI_BREAKDOWN;
@@ -439,19 +438,10 @@ export default function Analytics() {
   );
   const showingCount = currentPage * TABLE_PAGE_SIZE + pagedAiLogs.length;
 
-  const tripsCreatedThisWeek = trips.filter((trip) => isInRange(trip.created_at, weekCutoff)).length;
-  const stopsCreatedThisWeek = stops.filter((stop) => isInRange(stop.created_at, weekCutoff)).length;
-  const activeUsersThisWeek = new Set();
-  trips.forEach((trip) => {
-    if (trip.user_id && isInRange(trip.created_at, weekCutoff)) {
-      activeUsersThisWeek.add(trip.user_id);
-    }
-  });
-  collaborators.forEach((item) => {
-    if (item.user_id && isInRange(item.created_at, weekCutoff)) {
-      activeUsersThisWeek.add(item.user_id);
-    }
-  });
+  const tripsCreatedThisWeek = ownedTrips.filter((trip) => isInRange(trip.created_at, weekCutoff)).length;
+  const stopsCreatedThisWeek = stops.filter(
+    (stop) => filteredTripIds.has(stop.trip_id) && isInRange(stop.created_at, weekCutoff)
+  ).length;
 
   const statusRows = [
     { key: 'current', label: 'Current', count: statusCounts.current },
@@ -505,16 +495,8 @@ export default function Analytics() {
     },
     {
       label: 'Avg. stops per trip',
-      value: formatAverage(avgStopsPerTrip),
+      value: formatWholeNumber(avgStopsPerTrip),
       note: formatTripSpanNote(avgTripSpan),
-    },
-    {
-      label: 'Total users',
-      value: formatNumber(totalUsers),
-      note:
-        activeUsersThisWeek.size > 0
-          ? formatDelta(activeUsersThisWeek.size)
-          : `${formatNumber(sharedTripCount)} shared trips`,
     },
   ];
 
