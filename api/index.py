@@ -15,7 +15,7 @@ CORS(app, origins=[
     'https://*.vercel.app',
 ])
 
-OPENROUTER_MODEL_ID = os.environ.get('OPENROUTER_MODEL_ID', 'openai/gpt-oss-120b:free').strip() or 'openai/gpt-oss-120b:free'
+GROQ_MODEL_ID = 'meta-llama/llama-4-scout-17b-16e-instruct'
 REQUEST_HEADERS = {'User-Agent': 'Waypoint/1.0 (travel itinerary app)'}
 VALID_STOP_CATEGORIES = {'restaurant', 'attraction', 'hotel', 'activity', 'transport', 'other'}
 
@@ -329,62 +329,28 @@ def geocode_stops(stops, destination):
     return stops
 
 
-def get_openrouter_api_key():
-    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+def get_groq_client():
+    api_key = os.environ.get('GROQ_API_KEY', '').strip()
     if not api_key:
-        raise RuntimeError('OPENROUTER_API_KEY is not configured.')
-    return api_key
+        raise RuntimeError('GROQ_API_KEY is not configured.')
+    from groq import Groq
+    return Groq(api_key=api_key)
 
 
-def openrouter_chat_completion(*, messages, temperature, max_tokens, response_format=None):
-    api_key = get_openrouter_api_key()
-    payload = {
-        'model': OPENROUTER_MODEL_ID,
+def groq_chat_completion(*, messages, temperature, max_tokens, response_format=None):
+    client = get_groq_client()
+    kwargs = {
+        'model': GROQ_MODEL_ID,
         'messages': messages,
         'temperature': temperature,
         'max_tokens': max_tokens,
     }
     if response_format:
-        payload['response_format'] = response_format
-
-    response = http_requests.post(
-        'https://openrouter.ai/api/v1/chat/completions',
-        headers={
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'http://localhost:5173',
-            'X-Title': 'Waypoint',
-        },
-        json=payload,
-        timeout=45,
-    )
-
-    if response.status_code >= 400:
-        detail = ''
-        try:
-            detail = response.json().get('error', {}).get('message', '')
-        except Exception:
-            detail = ''
-        message = f'OpenRouter request failed with status {response.status_code}.'
-        if detail:
-            message = f'{message} {detail}'
-        raise RuntimeError(message)
-
-    try:
-        content = response.json()['choices'][0]['message']['content']
-    except (KeyError, IndexError, TypeError):
-        raise RuntimeError('OpenRouter response format was unexpected.')
-
-    if content is None:
-        raise RuntimeError('OpenRouter returned empty content.')
-
-    if isinstance(content, list):
-        flattened = ''.join(part.get('text', '') if isinstance(part, dict) else str(part) for part in content).strip()
-        if not flattened:
-            raise RuntimeError('OpenRouter returned empty content.')
-        return flattened
-    if isinstance(content, str) and not content.strip():
-        raise RuntimeError('OpenRouter returned empty content.')
+        kwargs['response_format'] = response_format
+    response = client.chat.completions.create(**kwargs)
+    content = response.choices[0].message.content
+    if not content or not content.strip():
+        raise RuntimeError('Groq returned empty content.')
     return content
 
 
@@ -420,7 +386,7 @@ def place_search():
 
 @app.route('/api/parse', methods=['POST'])
 def parse_trip():
-    """Parse unstructured trip notes into structured stops using OpenRouter."""
+    """Parse unstructured trip notes into structured stops using Groq / Llama 4."""
     data = request.get_json() or {}
     raw_text    = data.get('text', '').strip()
     trip_name   = data.get('name', 'My Trip')
@@ -460,7 +426,7 @@ def parse_trip():
     )
 
     try:
-        content = openrouter_chat_completion(
+        content = groq_chat_completion(
             messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': (
@@ -518,7 +484,7 @@ def suggest_stops():
     )
 
     try:
-        content = openrouter_chat_completion(
+        content = groq_chat_completion(
             messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': (
@@ -573,7 +539,7 @@ def explore_places():
     )
 
     try:
-        content = openrouter_chat_completion(
+        content = groq_chat_completion(
             messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': (

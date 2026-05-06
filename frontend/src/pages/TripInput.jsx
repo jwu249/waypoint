@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { MapContainer, Marker, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import BrandMark from '../components/BrandMark';
 import CategoryIcon from '../components/CategoryIcon';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
