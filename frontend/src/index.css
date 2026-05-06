@@ -6,6 +6,22 @@
   box-sizing: border-box;
 }
 
+@media (max-width: 960px) {
+  .generated-stop-meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .parse-debug-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .generated-stop-meta-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 :root {
   --mother-earth: #513229;
   --lucky-dice: #f4f1e2;
@@ -2042,23 +2058,27 @@ textarea {
 }
 
 .parse-layout {
-  min-height: calc(100vh - 52px);
+  height: calc(100vh - 52px);
+  min-height: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .parse-panel {
   padding: 36px 48px;
+  min-height: 0;
 }
 
 .parse-panel-left {
   border-right: 1px solid var(--line);
+  overflow-y: auto;
 }
 
 .parse-panel-map {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  overflow: hidden;
 }
 
 .parse-kicker {
@@ -2186,7 +2206,7 @@ textarea {
 
 .parse-map-frame {
   flex: 1;
-  min-height: 420px;
+  min-height: 0;
 }
 
 .parse-map-toast,
@@ -2258,6 +2278,76 @@ textarea {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.generated-empty {
+  padding: 16px;
+}
+
+.generated-stop-editor {
+  padding: 14px;
+}
+
+.generated-stop-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.generated-stop-head-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.generated-stop-meta-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.generated-stop-notes {
+  min-height: 84px;
+}
+
+.parse-debug-panel {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+}
+
+.parse-debug-panel-live {
+  margin-top: 14px;
+}
+
+.parse-debug-summary {
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.parse-debug-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.parse-debug-block {
+  min-width: 0;
+}
+
+.parse-debug-code {
+  margin: 6px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ink-2);
 }
 
 .detail-rail-actions {
@@ -2389,10 +2479,6 @@ textarea {
   transition: border-color 160ms ease;
 }
 
-.day-group.drop-active {
-  border-bottom-color: rgba(110, 69, 52, 0.28);
-}
-
 .day-header {
   width: 100%;
   display: flex;
@@ -2439,11 +2525,6 @@ textarea {
 .day-body {
   gap: 8px;
   margin-top: 12px;
-  transition: transform 180ms ease, opacity 180ms ease;
-}
-
-.day-body.drop-active {
-  animation: day-drop-body-enter 180ms ease;
 }
 
 .stop-card {
@@ -2454,13 +2535,31 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: white;
-  cursor: grab;
-  user-select: none;
+  cursor: pointer;
   transition:
     border-color 140ms ease,
     box-shadow 140ms ease,
-    transform 140ms ease,
     background-color 140ms ease;
+}
+
+.stop-card.stop-card-reordering {
+  position: relative;
+  z-index: 3;
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
+}
+
+.stop-card.stop-card-reordering-active {
+  z-index: 6;
+  box-shadow: 0 18px 36px rgba(49, 33, 24, 0.2);
+}
+
+.stop-card .stop-index,
+.stop-card .stop-copy,
+.stop-card .stop-menu,
+.stop-card .stop-reorder {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .stop-card:hover {
@@ -2472,30 +2571,51 @@ textarea {
   box-shadow: 0 0 0 3px rgba(110, 69, 52, 0.12);
 }
 
-.stop-card:active {
-  cursor: grabbing;
+.stop-position {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-.stop-drag-handle {
+.stop-reorder {
+  display: flex;
+  flex-direction: row;
+  gap: 2px;
+}
+
+.stop-reorder-btn {
+  width: 18px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  min-height: 28px;
-  margin-top: 1px;
-  flex-shrink: 0;
-  color: var(--ink-4);
-  font-size: 12px;
-  line-height: 0.9;
-  letter-spacing: -1px;
-  cursor: grab;
-  pointer-events: none;
-  transition: color 140ms ease, transform 140ms ease;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink-3);
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 80ms ease;
 }
 
-.stop-card:hover .stop-drag-handle {
+.stop-reorder-btn:hover:not(:disabled) {
+  background: rgba(110, 69, 52, 0.08);
+  border-color: rgba(110, 69, 52, 0.45);
   color: var(--mother-earth);
-  transform: translateX(-1px);
+}
+
+.stop-reorder-btn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.stop-reorder-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 .stop-card.active {
@@ -2549,36 +2669,12 @@ textarea {
   line-height: 1.55;
 }
 
-.stop-card.dragging {
-  opacity: 0.38;
-  pointer-events: none;
-}
-
-.stop-card.drop-before {
-  outline: 2px solid rgba(110, 69, 52, 0.45);
-  outline-offset: 2px;
-}
-
 .stop-menu {
   font-family: var(--sans);
   font-size: 12px;
   color: var(--ink-4);
   padding: 0;
   line-height: 1;
-}
-
-.stop-dropzone {
-  height: 14px;
-  margin: 6px 0;
-  border-radius: 999px;
-  transition: height 160ms ease, background-color 140ms ease, box-shadow 140ms ease;
-}
-
-.stop-dropzone.active {
-  height: 24px;
-  background: rgba(110, 69, 52, 0.14);
-  box-shadow: inset 0 0 0 1px rgba(110, 69, 52, 0.35);
-  animation: stop-drop-pulse 1s ease-in-out infinite;
 }
 
 .day-empty-dropzone {
@@ -2617,28 +2713,6 @@ textarea {
   color: var(--ink-3);
   text-align: center;
   background: rgba(255, 255, 255, 0.6);
-}
-
-.empty-dropzone.drag-target {
-  min-height: 58px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-color: rgba(110, 69, 52, 0.28);
-  background: rgba(110, 69, 52, 0.04);
-  color: var(--ink-2);
-  transition:
-    transform 160ms ease,
-    background-color 160ms ease,
-    border-color 160ms ease,
-    box-shadow 160ms ease;
-}
-
-.empty-dropzone.drag-target.active {
-  transform: translateY(-1px);
-  background: rgba(110, 69, 52, 0.1);
-  border-color: rgba(110, 69, 52, 0.42);
-  box-shadow: 0 10px 24px rgba(48, 34, 28, 0.06);
 }
 
 .edit-stop-form,
@@ -2687,37 +2761,6 @@ textarea {
 
 .edit-stop-actions .danger {
   margin-left: auto;
-}
-
-.day-header.drag-over {
-  box-shadow: inset 0 0 0 1px rgba(110, 69, 52, 0.35);
-  background: rgba(110, 69, 52, 0.05);
-  transform: translateY(-1px);
-}
-
-@keyframes stop-drop-pulse {
-  0%,
-  100% {
-    box-shadow: inset 0 0 0 1px rgba(110, 69, 52, 0.35);
-  }
-
-  50% {
-    box-shadow:
-      inset 0 0 0 1px rgba(110, 69, 52, 0.45),
-      0 0 0 4px rgba(110, 69, 52, 0.06);
-  }
-}
-
-@keyframes day-drop-body-enter {
-  from {
-    opacity: 0.82;
-    transform: translateY(-3px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .map-stage {
@@ -4067,6 +4110,11 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .parse-layout {
+    height: auto;
+    min-height: calc(100vh - 52px);
+  }
+
   .input-page {
     height: auto;
     overflow: visible;
@@ -4096,6 +4144,10 @@ textarea {
   .parse-panel-left {
     border-right: 0;
     border-bottom: 1px solid var(--line);
+  }
+
+  .parse-panel-left {
+    overflow-y: visible;
   }
 
   .map-stage,

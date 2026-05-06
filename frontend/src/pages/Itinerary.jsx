@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -181,6 +181,74 @@ function sortStopsByDayAndPosition(items) {
   });
 }
 
+const STOP_REORDER_FLIP_MS = 320;
+const STOP_REORDER_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
+
+function captureStopCardRects(refsMap) {
+  const rects = {};
+  Object.entries(refsMap.current).forEach(([id, el]) => {
+    if (el) rects[id] = el.getBoundingClientRect();
+  });
+  return rects;
+}
+
+function runStopReorderFlip(refsMap, firstRects) {
+  if (typeof window === 'undefined') return;
+
+  const moves = [];
+  Object.entries(refsMap.current).forEach(([id, el]) => {
+    if (!el) return;
+    const first = firstRects[id];
+    if (!first) return;
+    const last = el.getBoundingClientRect();
+    const dx = first.left - last.left;
+    const dy = first.top - last.top;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+    moves.push({ id, el, dx, dy });
+  });
+
+  if (!moves.length) return;
+
+  let cleared = false;
+  const clearMotionState = () => {
+    if (cleared) return;
+    cleared = true;
+    moves.forEach(({ el }) => {
+      el.style.transform = '';
+      el.classList.remove('stop-card-reordering');
+      el.classList.remove('stop-card-reordering-active');
+    });
+  };
+
+  moves.forEach(({ id, el }) => {
+    el.getAnimations().forEach((animation) => animation.cancel());
+    el.classList.add('stop-card-reordering');
+    if (String(id) === String(firstRects.movingStopId)) {
+      el.classList.add('stop-card-reordering-active');
+    }
+  });
+
+  const animations = moves.map(({ el, dx, dy }) =>
+    el.animate(
+      [
+        { transform: `translate(${dx}px, ${dy}px)` },
+        { transform: 'translate(0, 0)' },
+      ],
+      {
+        duration: STOP_REORDER_FLIP_MS,
+        easing: STOP_REORDER_EASING,
+        fill: 'both',
+      }
+    )
+  );
+
+  Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
+    clearMotionState();
+  });
+
+  window.setTimeout(clearMotionState, STOP_REORDER_FLIP_MS + 120);
+}
+
 function normalizeDateDraft(trip) {
   return {
     startDate: trip?.start_date || '',
@@ -194,12 +262,6 @@ function addDaysToIsoDate(value, daysToAdd) {
   if (Number.isNaN(next.getTime())) return '';
   next.setDate(next.getDate() + daysToAdd);
   return next.toISOString().slice(0, 10);
-}
-
-function getCardDropIndex(event, index) {
-  const bounds = event.currentTarget.getBoundingClientRect();
-  const offset = event.clientY - bounds.top;
-  return offset > bounds.height / 2 ? index + 1 : index;
 }
 
 function EditStopForm({ stop, onChange, onSave, onCancel, onDelete }) {
@@ -467,10 +529,11 @@ export default function Itinerary() {
   const { id } = useParams();
   const { setTripName, setTripHref, setOnShare } = useNav();
   const markerRefs = useRef({});
+  const stopCardRefs = useRef({});
+  const reorderFlipFirstRectsRef = useRef(null);
   const composerAbortRef = useRef(null);
   const composerPanelRef = useRef(null);
   const composerInputRef = useRef(null);
-  const draggingStopIdRef = useRef(null);
 
   const [trip, setTrip] = useState(null);
   const [stops, setStops] = useState([]);
@@ -488,8 +551,6 @@ export default function Itinerary() {
   const [composerSelected, setComposerSelected] = useState(0);
   const [composerSearching, setComposerSearching] = useState(false);
   const [composerChosenPlace, setComposerChosenPlace] = useState(null);
-  const [draggingStopId, setDraggingStopId] = useState(null);
-  const [dropTarget, setDropTarget] = useState(null);
   const [dateEditorOpen, setDateEditorOpen] = useState(false);
   const [dateDraft, setDateDraft] = useState({ startDate: '', endDate: '' });
   const [dateSaving, setDateSaving] = useState(false);
@@ -580,6 +641,13 @@ export default function Itinerary() {
       }
     });
   }, [activeStop]);
+
+  useLayoutEffect(() => {
+    const firstRects = reorderFlipFirstRectsRef.current;
+    reorderFlipFirstRectsRef.current = null;
+    if (!firstRects) return;
+    runStopReorderFlip(stopCardRefs, firstRects);
+  }, [stops]);
 
   useEffect(() => {
     const currentMarkers = markerRefs.current;
@@ -881,6 +949,10 @@ export default function Itinerary() {
       });
     });
 
+    reorderFlipFirstRectsRef.current = {
+      ...captureStopCardRects(stopCardRefs),
+      movingStopId: stopId,
+    };
     setStops(nextStops);
     setExpandedDays((current) => new Set([...current, targetDay]));
     if (editingStop?.id === stopId) {
@@ -898,53 +970,35 @@ export default function Itinerary() {
       );
     } catch {
       setStops(previousStops);
-    } finally {
-      draggingStopIdRef.current = null;
-      setDraggingStopId(null);
-      setDropTarget(null);
     }
   }
 
-  function beginDrag(stopId) {
-    draggingStopIdRef.current = stopId;
-    setDraggingStopId(stopId);
-    setDropTarget(null);
-    if (activeStop === stopId) {
-      setActiveStop(null);
+  function shiftStop(stopId, direction) {
+    const stop = stops.find((item) => item.id === stopId);
+    if (!stop) return;
+
+    const day = stop.day ?? 1;
+    const dayStops = stops
+      .filter((item) => (item.day ?? 1) === day)
+      .sort((left, right) => (left.position ?? 0) - (right.position ?? 0));
+    const indexInDay = dayStops.findIndex((item) => item.id === stopId);
+    if (indexInDay === -1) return;
+
+    if (direction === 'up') {
+      if (indexInDay > 0) {
+        moveStop(stopId, day, indexInDay - 1);
+      } else if (day > 1) {
+        const previousDayStops = stops.filter((item) => (item.day ?? 1) === day - 1);
+        moveStop(stopId, day - 1, previousDayStops.length);
+      }
+      return;
     }
-  }
 
-  function allowDrop(event, day, index) {
-    if (!event.dataTransfer.types.includes('text/plain')) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    setExpandedDays((current) => (current.has(day) ? current : new Set([...current, day])));
-    setDropTarget({ day, index });
-  }
-
-  function allowDropOnCard(event, day, index) {
-    if (!event.dataTransfer.types.includes('text/plain')) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    setExpandedDays((current) => (current.has(day) ? current : new Set([...current, day])));
-    const targetIndex = getCardDropIndex(event, index);
-    setDropTarget({ day, index: targetIndex });
-  }
-
-  function handleDrop(event, day, index) {
-    event.preventDefault();
-    event.stopPropagation();
-    const stopId = Number(event.dataTransfer.getData('text/plain')) || draggingStopIdRef.current;
-    if (!stopId) return;
-    moveStop(stopId, day, index);
-  }
-
-  function handleCardDrop(event, day, index) {
-    event.preventDefault();
-    event.stopPropagation();
-    const stopId = Number(event.dataTransfer.getData('text/plain')) || draggingStopIdRef.current;
-    if (!stopId) return;
-    moveStop(stopId, day, getCardDropIndex(event, index));
+    if (indexInDay < dayStops.length - 1) {
+      moveStop(stopId, day, indexInDay + 2);
+    } else if (day < visibleDayCount) {
+      moveStop(stopId, day + 1, 0);
+    }
   }
 
   function toggleDay(day) {
@@ -1072,24 +1126,10 @@ export default function Itinerary() {
               const isOpen = expandedDays.has(day);
               const dayDistance = totalKm(dayStops);
               const dayDate = getDayDate(trip.start_date, day);
-              const dayIsDropTarget = Boolean(draggingStopId && dropTarget?.day === day);
 
               return (
-                <section
-                  key={day}
-                  className={`day-group ${dayIsDropTarget ? 'drop-active' : ''}`}
-                >
-                  <button
-                    className={`day-header ${
-                      draggingStopId && dropTarget?.day === day && dropTarget?.index === dayStops.length
-                        ? 'drag-over'
-                        : ''
-                    }`}
-                    onClick={() => toggleDay(day)}
-                    onDragEnter={(event) => allowDrop(event, day, dayStops.length)}
-                    onDragOver={(event) => allowDrop(event, day, dayStops.length)}
-                    onDrop={(event) => handleDrop(event, day, dayStops.length)}
-                  >
+                <section key={day} className="day-group">
+                  <button className="day-header" onClick={() => toggleDay(day)}>
                     <div className="day-header-left">
                       <span className="day-label">Day {day}</span>
                       {dayDate && <span className="day-date">{dayDate}</span>}
@@ -1104,145 +1144,117 @@ export default function Itinerary() {
                   </button>
 
                   {isOpen && (
-                    <div className={`day-body ${dayIsDropTarget ? 'drop-active' : ''}`}>
-                      {draggingStopId && dayStops.length > 0 && (
-                        <div
-                          className={`stop-dropzone ${
-                            dropTarget?.day === day && dropTarget?.index === 0 ? 'active' : ''
-                          }`}
-                          onDragEnter={(event) => allowDrop(event, day, 0)}
-                          onDragOver={(event) => allowDrop(event, day, 0)}
-                          onDrop={(event) => handleDrop(event, day, 0)}
-                        />
-                      )}
-
+                    <div className="day-body">
                       {dayStops.map((stop, index) => {
                         const category = getCategoryMeta(stop.category);
+                        const isFirstOverall = day === 1 && index === 0;
+                        const isLastOverall =
+                          day === visibleDayCount && index === dayStops.length - 1;
+                        const isEditing = editingStop?.id === stop.id;
 
                         return (
-                          <div key={stop.id}>
-                            <article
-                              className={`stop-card ${activeStop === stop.id ? 'active' : ''} ${
-                                draggingStopId === stop.id ? 'dragging' : ''
-                              } ${
-                                dropTarget?.day === day && dropTarget?.index === index
-                                  ? 'drop-before'
-                                  : ''
-                              }`}
-                              onClick={() => setActiveStop(stop.id === activeStop ? null : stop.id)}
-                              draggable={editingStop?.id !== stop.id}
-                              onDragStart={(event) => {
-                                event.dataTransfer.effectAllowed = 'move';
-                                event.dataTransfer.setData('text/plain', String(stop.id));
-                                beginDrag(stop.id);
-                              }}
-                              onDragEnd={() => {
-                                draggingStopIdRef.current = null;
-                                setDraggingStopId(null);
-                                setDropTarget(null);
-                              }}
-                              onDragEnter={(event) => allowDropOnCard(event, day, index)}
-                              onDragOver={(event) => allowDropOnCard(event, day, index)}
-                              onDrop={(event) => handleCardDrop(event, day, index)}
-                            >
+                          <article
+                            key={stop.id}
+                            ref={(node) => {
+                              if (node) stopCardRefs.current[stop.id] = node;
+                              else delete stopCardRefs.current[stop.id];
+                            }}
+                            className={`stop-card ${activeStop === stop.id ? 'active' : ''}`}
+                            onClick={() => setActiveStop(stop.id === activeStop ? null : stop.id)}
+                          >
+                            <div className="stop-position">
                               <div className="stop-index">{globalIndex(stop)}</div>
-
-                              {editingStop?.id !== stop.id && (
-                                <div
-                                  className="stop-drag-handle"
-                                  aria-hidden="true"
-                                  title="Drag to reorder or move to another day"
-                                >
-                                  ⋮⋮
+                              {!isEditing && (
+                                <div className="stop-reorder">
+                                  <button
+                                    type="button"
+                                    className="stop-reorder-btn"
+                                    aria-label="Move stop up"
+                                    title="Move up"
+                                    disabled={isFirstOverall}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      shiftStop(stop.id, 'up');
+                                    }}
+                                  >
+                                    ↑
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="stop-reorder-btn"
+                                    aria-label="Move stop down"
+                                    title="Move down"
+                                    disabled={isLastOverall}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      shiftStop(stop.id, 'down');
+                                    }}
+                                  >
+                                    ↓
+                                  </button>
                                 </div>
                               )}
+                            </div>
 
-                              <div className="stop-copy">
-                                {editingStop?.id === stop.id ? (
-                                  <EditStopForm
-                                    stop={editingStop}
-                                    onChange={setEditingStop}
-                                    onSave={() => saveEdit(editingStop)}
-                                    onCancel={() => setEditingStop(null)}
-                                    onDelete={async () => {
-                                      await deleteStop(editingStop.id);
-                                      setEditingStop(null);
-                                    }}
-                                  />
-                                ) : (
-                                  <>
-                                    <div className="stop-topline">
-                                      <div className="stop-name">{stop.name}</div>
-                                      {stop.stop_time && <div className="stop-time">{stop.stop_time}</div>}
-                                    </div>
-                                    {stop.address && <div className="stop-subtitle">{stop.address}</div>}
-                                    {stop.notes && <div className="stop-notes">{stop.notes}</div>}
-                                    {stop.category && stop.category !== 'other' && (
-                                      <span className={`tag tag-${category.tone}`}>
-                                        <CategoryIcon kind={category.icon} size={11} />
-                                        <span>{categoryLabel(stop.category)}</span>
-                                      </span>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-
-                              {editingStop?.id !== stop.id && (
-                                <button
-                                  className="stop-menu"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    const { start, end } = parseStopTimeRange(stop.stop_time);
-                                    setEditingStop({
-                                      ...stop,
-                                      stopTimeStart: start,
-                                      stopTimeEnd: end,
-                                    });
+                            <div className="stop-copy">
+                              {isEditing ? (
+                                <EditStopForm
+                                  stop={editingStop}
+                                  onChange={setEditingStop}
+                                  onSave={() => saveEdit(editingStop)}
+                                  onCancel={() => setEditingStop(null)}
+                                  onDelete={async () => {
+                                    await deleteStop(editingStop.id);
+                                    setEditingStop(null);
                                   }}
-                                  title="Edit stop"
-                                >
-                                  ⋯
-                                </button>
+                                />
+                              ) : (
+                                <>
+                                  <div className="stop-topline">
+                                    <div className="stop-name">{stop.name}</div>
+                                    {stop.stop_time && <div className="stop-time">{stop.stop_time}</div>}
+                                  </div>
+                                  {stop.address && <div className="stop-subtitle">{stop.address}</div>}
+                                  {stop.notes && <div className="stop-notes">{stop.notes}</div>}
+                                  {stop.category && stop.category !== 'other' && (
+                                    <span className={`tag tag-${category.tone}`}>
+                                      <CategoryIcon kind={category.icon} size={11} />
+                                      <span>{categoryLabel(stop.category)}</span>
+                                    </span>
+                                  )}
+                                </>
                               )}
-                            </article>
+                            </div>
 
-                            {draggingStopId && (
-                              <div
-                                className={`stop-dropzone ${
-                                  dropTarget?.day === day && dropTarget?.index === index + 1 ? 'active' : ''
-                                }`}
-                                onDragEnter={(event) => allowDrop(event, day, index + 1)}
-                                onDragOver={(event) => allowDrop(event, day, index + 1)}
-                                onDrop={(event) => handleDrop(event, day, index + 1)}
-                              />
+                            {!isEditing && (
+                              <button
+                                className="stop-menu"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  const { start, end } = parseStopTimeRange(stop.stop_time);
+                                  setEditingStop({
+                                    ...stop,
+                                    stopTimeStart: start,
+                                    stopTimeEnd: end,
+                                  });
+                                }}
+                                title="Edit stop"
+                              >
+                                ⋯
+                              </button>
                             )}
-                          </div>
+                          </article>
                         );
                       })}
 
-                      {draggingStopId ? (
-                        <div
-                          className={`empty-dropzone drag-target ${
-                            dropTarget?.day === day && dropTarget?.index === dayStops.length
-                              ? 'active'
-                              : ''
-                          }`}
-                          onDragEnter={(event) => allowDrop(event, day, dayStops.length)}
-                          onDragOver={(event) => allowDrop(event, day, dayStops.length)}
-                          onDrop={(event) => handleDrop(event, day, dayStops.length)}
-                        >
-                          Drop here to move to Day {day}
-                        </div>
-                      ) : (
-                        <button
-                          className="empty-dropzone"
-                          onClick={() => {
-                            openComposer(day);
-                          }}
-                        >
-                          + Add stop
-                        </button>
-                      )}
+                      <button
+                        className="empty-dropzone"
+                        onClick={() => {
+                          openComposer(day);
+                        }}
+                      >
+                        + Add stop
+                      </button>
                     </div>
                   )}
                 </section>

@@ -23,6 +23,7 @@ const INTEREST_OPTIONS = [
   { id: 'Wellness & spa', icon: 'stay' },
   { id: 'Adventure', icon: 'walk' },
 ];
+const STOP_CATEGORIES = ['restaurant', 'attraction', 'hotel', 'activity', 'transport', 'other'];
 
 function inferCurrencyFromDestination(destination) {
   const value = destination.trim().toLowerCase();
@@ -202,7 +203,12 @@ export default function TripInput() {
   const [interests, setInterests] = useState([]);
 
   const [parsing, setParsing] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const [error, setError] = useState('');
+  const [parseWarning, setParseWarning] = useState('');
+  const [parseResolved, setParseResolved] = useState(false);
+  const [parseDebugInput, setParseDebugInput] = useState(null);
+  const [parseDebugOutput, setParseDebugOutput] = useState(null);
   const [allStops, setAllStops] = useState([]);
   const [revealed, setRevealed] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -220,9 +226,9 @@ export default function TripInput() {
   }, [location.state]);
 
   const revealRef = useRef(null);
-  const autoSaveTriggeredRef = useRef(false);
   const visibleStops = allStops.slice(0, revealed);
   const estimatedStops = Math.max(0, Math.round(rawText.trim().length / 34));
+  const canSaveDraft = allStops.some((stop) => stop.name?.trim());
   const missingRequired = {
     tripName: !tripName.trim(),
     destination: !destination.trim(),
@@ -306,6 +312,33 @@ export default function TripInput() {
     setOpenOptionalSection((current) => (current === section ? '' : section));
   }
 
+  function updateDraftStop(index, patch) {
+    setAllStops((current) =>
+      current.map((stop, stopIndex) => (stopIndex === index ? { ...stop, ...patch } : stop))
+    );
+  }
+
+  function addDraftStop() {
+    setAllStops((current) => [
+      ...current,
+      {
+        name: '',
+        address: destination || '',
+        day: 1,
+        notes: '',
+        category: 'other',
+        stop_time: null,
+        duration_minutes: null,
+        lat: null,
+        lng: null,
+      },
+    ]);
+  }
+
+  function deleteDraftStop(index) {
+    setAllStops((current) => current.filter((_, stopIndex) => stopIndex !== index));
+  }
+
   async function handleCreate() {
     setSubmitted(true);
 
@@ -314,21 +347,30 @@ export default function TripInput() {
     }
 
     setError('');
+    setParseWarning('');
     setParsing(true);
+    setReviewing(false);
     setSaving(false);
+    setParseResolved(false);
     setAllStops([]);
     setRevealed(0);
-    autoSaveTriggeredRef.current = false;
+
+    const parsePayload = {
+      text: rawText || `${tripName} in ${destination} from ${startDate} to ${endDate}.`,
+      name: tripName || destination || 'My Trip',
+      destination: destination || '',
+      start_date: startDate || '',
+      end_date: endDate || '',
+      interests,
+    };
+    setParseDebugInput(parsePayload);
+    setParseDebugOutput(null);
 
     try {
       const response = await fetch('/api/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: rawText || `${tripName} in ${destination} from ${startDate} to ${endDate}.`,
-          name: tripName || destination || 'My Trip',
-          destination: destination || '',
-        }),
+        body: JSON.stringify(parsePayload),
       });
 
       if (!response.ok) {
@@ -340,12 +382,10 @@ export default function TripInput() {
 
       const stops = data.stops ?? [];
       setAllStops(stops);
-
-      if (stops.length === 0) {
-        autoSaveTriggeredRef.current = true;
-        await handleSave([]);
-      }
-    } catch (requestError) {
+      setParseWarning(data.warning || '');
+      setParseResolved(true);
+      setParseDebugOutput(data);
+    } catch {
       const fallbackStops = buildFallbackStops({
         destination,
         interests,
@@ -353,11 +393,19 @@ export default function TripInput() {
         tripName,
       });
       setAllStops(fallbackStops);
+      setParseWarning('AI unavailable, using fallback draft.');
+      setParseResolved(true);
+      setParseDebugOutput({
+        stops: fallbackStops,
+        warning: 'AI unavailable, using fallback draft.',
+      });
     }
   }
 
   async function handleSave(stops) {
     setSaving(true);
+    setError('');
+    setReviewing(true);
 
     try {
       await persistTrip({
@@ -368,7 +416,17 @@ export default function TripInput() {
         navigate,
         rawText,
         startDate,
-        stops,
+        stops: stops
+          .filter((stop) => stop.name?.trim())
+          .map((stop) => {
+            const parsedDay = Number.parseInt(`${stop.day ?? '1'}`, 10);
+            const parsedDuration = Number.parseInt(`${stop.duration_minutes ?? ''}`, 10);
+            return {
+              ...stop,
+              day: Number.isFinite(parsedDay) && parsedDay > 0 ? parsedDay : 1,
+              duration_minutes: Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : null,
+            };
+          }),
         supabaseClient: supabase,
         travelers,
         tripName,
@@ -377,26 +435,21 @@ export default function TripInput() {
     } catch (saveError) {
       setError(`Failed to save: ${saveError.message}`);
       setParsing(false);
+      setReviewing(true);
       setSaving(false);
     }
   }
 
   useEffect(() => {
-    if (!(allStops.length > 0 && revealed >= allStops.length)) return;
-    if (autoSaveTriggeredRef.current) return undefined;
-
+    if (!parsing || !parseResolved) return undefined;
+    const done = allStops.length === 0 || revealed >= allStops.length;
+    if (!done) return undefined;
     const timer = window.setTimeout(() => {
-      autoSaveTriggeredRef.current = true;
-      handleSave(allStops);
-    }, 420);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [
-    allStops.length,
-    revealed,
-  ]);
+      setParsing(false);
+      setReviewing(true);
+    }, allStops.length === 0 ? 0 : 260);
+    return () => window.clearTimeout(timer);
+  }, [allStops.length, parseResolved, parsing, revealed]);
 
   const estSeconds =
     allStops.length > 0
@@ -424,6 +477,8 @@ export default function TripInput() {
             className="shell-btn shell-btn-ghost shell-btn-sm"
             onClick={() => {
               setParsing(false);
+              setReviewing(false);
+              setParseResolved(false);
               setAllStops([]);
               setRevealed(0);
               clearInterval(revealRef.current);
@@ -508,6 +563,28 @@ export default function TripInput() {
                 );
               })}
             </div>
+
+            <details className="panel-card parse-debug-panel parse-debug-panel-live">
+              <summary className="parse-debug-summary">Debug: parse input and model output</summary>
+              <div className="parse-debug-grid">
+                <div className="parse-debug-block">
+                  <div className="sidebar-label">Input payload</div>
+                  <pre className="parse-debug-code">
+                    {JSON.stringify(parseDebugInput || {}, null, 2)}
+                  </pre>
+                </div>
+                <div className="parse-debug-block">
+                  <div className="sidebar-label">Output JSON</div>
+                  <pre className="parse-debug-code">
+                    {JSON.stringify(
+                      parseDebugOutput || { status: 'Waiting for /api/parse response...' },
+                      null,
+                      2
+                    )}
+                  </pre>
+                </div>
+              </div>
+            </details>
           </section>
 
           <section className="parse-panel parse-panel-map">
@@ -541,6 +618,247 @@ export default function TripInput() {
               )}
 
               <div className="parse-map-toast">geocoding your route…</div>
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  if (reviewing || saving) {
+    return (
+      <div className="parse-shell">
+        <div className="parse-topbar">
+          <div className="brand">
+            <BrandMark size={24} />
+            <span>Waypoint</span>
+          </div>
+          {!saving && (
+            <button
+              className="shell-btn shell-btn-ghost shell-btn-sm"
+              onClick={() => {
+                setReviewing(false);
+                setParseResolved(false);
+              }}
+            >
+              Back
+            </button>
+          )}
+        </div>
+
+        <div className="parse-layout">
+          <section className="parse-panel parse-panel-left">
+            <div className="parse-kicker">
+              <span className={saving ? 'parse-spinner' : 'generated-check'}>{saving ? '' : '✓'}</span>
+              <span>{saving ? 'Saving itinerary' : 'Review generated itinerary'}</span>
+            </div>
+            <h1 className="page-title parse-title">
+              {saving ? 'Creating itinerary…' : 'Edit stops before saving'}
+            </h1>
+            <p className="page-subtitle">
+              {saving
+                ? 'Saving your trip and taking you into the itinerary.'
+                : 'Adjust days, details, and categories. Save when this looks right.'}
+            </p>
+
+            {error && <div className="banner banner-error">{error}</div>}
+            {parseWarning && <div className="banner banner-warning">{parseWarning}</div>}
+
+            <div className="generated-summary-row">
+              <div className="generated-summary-card">
+                <div className="sidebar-label">Stops</div>
+                <div className="generated-summary-value">{allStops.length}</div>
+              </div>
+              <div className="generated-summary-card">
+                <div className="sidebar-label">Mapped pins</div>
+                <div className="generated-summary-value">
+                  {allStops.filter((stop) => stop.lat && stop.lng).length}
+                </div>
+              </div>
+              <div className="generated-summary-card">
+                <div className="sidebar-label">Days covered</div>
+                <div className="generated-summary-value">
+                  {new Set(allStops.map((stop) => Number.parseInt(`${stop.day || 1}`, 10) || 1)).size}
+                </div>
+              </div>
+            </div>
+
+            <details className="panel-card parse-debug-panel">
+              <summary className="parse-debug-summary">Debug: parse input and model output</summary>
+              <div className="parse-debug-grid">
+                <div className="parse-debug-block">
+                  <div className="sidebar-label">Input payload</div>
+                  <pre className="parse-debug-code">
+                    {JSON.stringify(parseDebugInput || {}, null, 2)}
+                  </pre>
+                </div>
+                <div className="parse-debug-block">
+                  <div className="sidebar-label">Output JSON</div>
+                  <pre className="parse-debug-code">
+                    {JSON.stringify(parseDebugOutput || {}, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            </details>
+
+            <div className="generated-stop-list">
+              {allStops.length === 0 ? (
+                <div className="panel-card generated-empty">
+                  <p className="section-copy">No stops generated yet. Add one manually to continue.</p>
+                </div>
+              ) : (
+                allStops.map((stop, index) => (
+                  <div key={`generated-stop-${index}`} className="panel-card generated-stop-editor">
+                    <div className="generated-stop-head">
+                      <div className="stop-index">{index + 1}</div>
+                      <div className="generated-stop-head-copy">
+                        <div className="stop-name">{stop.name || `Stop ${index + 1}`}</div>
+                        <div className="stop-subtitle">Day {Number.parseInt(`${stop.day || 1}`, 10) || 1}</div>
+                      </div>
+                      {!saving && (
+                        <button
+                          className="text-action danger-text"
+                          onClick={() => deleteDraftStop(index)}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                    <div className="form-grid two-up">
+                      <label className="form-label">
+                        Name
+                        <input
+                          className="form-input"
+                          value={stop.name || ''}
+                          onChange={(event) => updateDraftStop(index, { name: event.target.value })}
+                          disabled={saving}
+                        />
+                      </label>
+                      <label className="form-label">
+                        Address
+                        <input
+                          className="form-input"
+                          value={stop.address || ''}
+                          onChange={(event) => updateDraftStop(index, { address: event.target.value })}
+                          disabled={saving}
+                        />
+                      </label>
+                    </div>
+                    <div className="form-grid generated-stop-meta-grid">
+                      <label className="form-label">
+                        Day
+                        <input
+                          className="form-input"
+                          type="number"
+                          min="1"
+                          value={stop.day ?? 1}
+                          onChange={(event) => updateDraftStop(index, { day: event.target.value })}
+                          disabled={saving}
+                        />
+                      </label>
+                      <label className="form-label">
+                        Category
+                        <select
+                          className="form-input"
+                          value={stop.category || 'other'}
+                          onChange={(event) => updateDraftStop(index, { category: event.target.value })}
+                          disabled={saving}
+                        >
+                          {STOP_CATEGORIES.map((category) => (
+                            <option key={category} value={category}>{category}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="form-label">
+                        Time
+                        <input
+                          className="form-input"
+                          placeholder="09:00"
+                          value={stop.stop_time || ''}
+                          onChange={(event) => updateDraftStop(index, { stop_time: event.target.value || null })}
+                          disabled={saving}
+                        />
+                      </label>
+                      <label className="form-label">
+                        Duration (min)
+                        <input
+                          className="form-input"
+                          type="number"
+                          min="1"
+                          value={stop.duration_minutes ?? ''}
+                          onChange={(event) =>
+                            updateDraftStop(index, { duration_minutes: event.target.value || null })
+                          }
+                          disabled={saving}
+                        />
+                      </label>
+                    </div>
+                    <label className="form-label">
+                      Notes
+                      <textarea
+                        className="notes-field generated-stop-notes"
+                        value={stop.notes || ''}
+                        onChange={(event) => updateDraftStop(index, { notes: event.target.value })}
+                        disabled={saving}
+                      />
+                    </label>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="generated-actions">
+              <button
+                className="shell-btn shell-btn-ghost"
+                onClick={addDraftStop}
+                disabled={saving}
+              >
+                Add stop
+              </button>
+              <button
+                className="shell-btn shell-btn-ghost"
+                onClick={handleCreate}
+                disabled={saving}
+              >
+                Regenerate
+              </button>
+              <button
+                className="shell-btn"
+                onClick={() => handleSave(allStops)}
+                disabled={saving || !canSaveDraft}
+              >
+                {saving ? 'Creating itinerary…' : 'Create itinerary'}
+              </button>
+            </div>
+          </section>
+
+          <section className="parse-panel parse-panel-map generated-panel-map">
+            <div className="parse-map-label">
+              <span className="sidebar-label">Map preview</span>
+              <span className="parse-map-caption">updates from your current review draft</span>
+            </div>
+
+            <div className="parse-map-frame">
+              {allStops.some((stop) => stop.lat && stop.lng) ? (
+                <MapContainer center={[20, 0]} zoom={2} zoomControl={false} className="full-map">
+                  <TileLayer
+                    url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                    attribution="© OpenStreetMap © CARTO"
+                  />
+                  <MapAutoFit stops={allStops} />
+                  {allStops.map((stop, index) =>
+                    stop.lat && stop.lng ? (
+                      <Marker
+                        key={`${stop.name}-${index}`}
+                        position={[stop.lat, stop.lng]}
+                        icon={createNumberedPin(index + 1)}
+                      />
+                    ) : null
+                  )}
+                </MapContainer>
+              ) : (
+                <div className="map-empty">No coordinates available yet for this draft.</div>
+              )}
             </div>
           </section>
         </div>

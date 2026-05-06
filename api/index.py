@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import date
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -14,8 +15,87 @@ CORS(app, origins=[
     'https://*.vercel.app',
 ])
 
-GROQ_MODEL_ID = 'meta-llama/llama-4-scout-17b-16e-instruct'
+OPENROUTER_MODEL_ID = os.environ.get('OPENROUTER_MODEL_ID', 'openai/gpt-oss-120b:free').strip() or 'openai/gpt-oss-120b:free'
 REQUEST_HEADERS = {'User-Agent': 'Waypoint/1.0 (travel itinerary app)'}
+VALID_STOP_CATEGORIES = {'restaurant', 'attraction', 'hotel', 'activity', 'transport', 'other'}
+
+
+def parse_iso_date(raw_value):
+    if not raw_value or not isinstance(raw_value, str):
+        return None
+    try:
+        return date.fromisoformat(raw_value.strip())
+    except ValueError:
+        return None
+
+
+def infer_trip_day_count(start_date, end_date):
+    if not start_date or not end_date:
+        return None
+    if end_date < start_date:
+        return None
+    return max(1, (end_date - start_date).days + 1)
+
+
+def normalize_stop(stop, fallback_day=1):
+    if not isinstance(stop, dict):
+        return None
+
+    raw_name = stop.get('name')
+    name = raw_name.strip() if isinstance(raw_name, str) else ''
+    name = name or 'Untitled stop'
+    raw_day = stop.get('day', fallback_day)
+    try:
+        day = int(raw_day)
+    except (TypeError, ValueError):
+        day = fallback_day
+    day = max(1, day)
+
+    raw_category = stop.get('category')
+    category = raw_category.strip().lower() if isinstance(raw_category, str) else 'other'
+    if category not in VALID_STOP_CATEGORIES:
+        category = 'other'
+
+    stop_time = stop.get('stop_time')
+    stop_time = str(stop_time).strip() if isinstance(stop_time, str) and stop_time.strip() else None
+
+    duration_minutes = stop.get('duration_minutes')
+    if duration_minutes in ('', None):
+        duration_minutes = None
+    else:
+        try:
+            duration_minutes = int(duration_minutes)
+            if duration_minutes <= 0:
+                duration_minutes = None
+        except (TypeError, ValueError):
+            duration_minutes = None
+
+    address = stop.get('address')
+    address = str(address).strip() if isinstance(address, str) and address.strip() else None
+    notes = stop.get('notes')
+    notes = str(notes).strip() if isinstance(notes, str) and notes.strip() else ''
+
+    return {
+        'name': name,
+        'address': address,
+        'day': day,
+        'notes': notes,
+        'category': category,
+        'stop_time': stop_time,
+        'duration_minutes': duration_minutes,
+    }
+
+
+def normalize_and_clamp_stops(stops, trip_day_count=None):
+    normalized = []
+    for stop in stops:
+        item = normalize_stop(stop, fallback_day=1)
+        if not item:
+            continue
+        if trip_day_count is not None:
+            item['day'] = min(max(1, item['day']), trip_day_count)
+        normalized.append(item)
+    return normalized
 
 
 def geocode_destination(destination):
@@ -249,12 +329,75 @@ def geocode_stops(stops, destination):
     return stops
 
 
-def get_groq_client():
-    api_key = os.environ.get('GROQ_API_KEY', '').strip()
+def get_openrouter_api_key():
+    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
     if not api_key:
-        raise RuntimeError('GROQ_API_KEY is not configured.')
-    from groq import Groq
-    return Groq(api_key=api_key)
+        raise RuntimeError('OPENROUTER_API_KEY is not configured.')
+    return api_key
+
+
+def openrouter_chat_completion(*, messages, temperature, max_tokens, response_format=None):
+    api_key = get_openrouter_api_key()
+    payload = {
+        'model': OPENROUTER_MODEL_ID,
+        'messages': messages,
+        'temperature': temperature,
+        'max_tokens': max_tokens,
+    }
+    if response_format:
+        payload['response_format'] = response_format
+
+    response = http_requests.post(
+        'https://openrouter.ai/api/v1/chat/completions',
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'http://localhost:5173',
+            'X-Title': 'Waypoint',
+        },
+        json=payload,
+        timeout=45,
+    )
+
+    if response.status_code >= 400:
+        detail = ''
+        try:
+            detail = response.json().get('error', {}).get('message', '')
+        except Exception:
+            detail = ''
+        message = f'OpenRouter request failed with status {response.status_code}.'
+        if detail:
+            message = f'{message} {detail}'
+        raise RuntimeError(message)
+
+    try:
+        content = response.json()['choices'][0]['message']['content']
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError('OpenRouter response format was unexpected.')
+
+    if content is None:
+        raise RuntimeError('OpenRouter returned empty content.')
+
+    if isinstance(content, list):
+        flattened = ''.join(part.get('text', '') if isinstance(part, dict) else str(part) for part in content).strip()
+        if not flattened:
+            raise RuntimeError('OpenRouter returned empty content.')
+        return flattened
+    if isinstance(content, str) and not content.strip():
+        raise RuntimeError('OpenRouter returned empty content.')
+    return content
+
+
+def parse_json_object(content):
+    if not isinstance(content, str):
+        raise RuntimeError('Model returned non-text content.')
+    try:
+        result = json.loads(content)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise RuntimeError('Model returned invalid JSON.')
+    if not isinstance(result, dict):
+        raise RuntimeError('Model returned JSON in an unexpected shape.')
+    return result
 
 
 @app.route('/api/health')
@@ -277,19 +420,21 @@ def place_search():
 
 @app.route('/api/parse', methods=['POST'])
 def parse_trip():
-    """Parse unstructured trip notes into structured stops using Groq / Llama 4."""
+    """Parse unstructured trip notes into structured stops using OpenRouter."""
     data = request.get_json() or {}
     raw_text    = data.get('text', '').strip()
     trip_name   = data.get('name', 'My Trip')
     destination = data.get('destination', '')
+    start_date = parse_iso_date(data.get('start_date'))
+    end_date = parse_iso_date(data.get('end_date'))
+    interests = data.get('interests', [])
+    if not isinstance(interests, list):
+        interests = []
+    interests = [str(interest).strip() for interest in interests if str(interest).strip()]
+    trip_day_count = infer_trip_day_count(start_date, end_date)
 
     if not raw_text:
         return jsonify({'error': 'No text provided'}), 400
-
-    try:
-        client = get_groq_client()
-    except RuntimeError as e:
-        return jsonify({'stops': [], 'warning': str(e)})
 
     system_prompt = (
         'You are a trip planning assistant. Extract all places, stops, and activities '
@@ -302,23 +447,45 @@ def parse_trip():
         '"category" (one of: restaurant, attraction, hotel, activity, transport, other), '
         '"stop_time" (string, 24h format like "08:30" if time of day is mentioned or strongly implied, else null), '
         '"duration_minutes" (integer, estimated duration in minutes if mentioned or implied, else null). '
+        'Use the provided trip window to distribute stops into realistic day numbers when available. '
+        'Use user interests to prioritize relevant stop categories and activities. '
         'Do NOT include lat or lng — coordinates will be looked up separately. '
         'Order stops chronologically within each day. Return only valid JSON.'
     )
-
-    response = client.chat.completions.create(
-        model=GROQ_MODEL_ID,
-        messages=[
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user', 'content': f'Trip name: {trip_name}\nDestination: {destination}\n\nNotes:\n{raw_text}'},
-        ],
-        response_format={'type': 'json_object'},
-        temperature=0.2,
-        max_tokens=2048,
+    interest_hint = ', '.join(interests) if interests else 'none provided'
+    trip_window = (
+        f'{start_date.isoformat()} to {end_date.isoformat()} ({trip_day_count} days)'
+        if trip_day_count is not None
+        else 'not provided'
     )
 
-    result = json.loads(response.choices[0].message.content)
-    stops  = result.get('stops', [])
+    try:
+        content = openrouter_chat_completion(
+            messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': (
+                    f'Trip name: {trip_name}\n'
+                    f'Destination: {destination}\n'
+                    f'Trip window: {trip_window}\n'
+                    f'Interests: {interest_hint}\n\n'
+                    f'Notes:\n{raw_text}'
+                )},
+            ],
+            response_format={'type': 'json_object'},
+            temperature=0.2,
+            max_tokens=2048,
+        )
+    except RuntimeError as e:
+        return jsonify({'stops': [], 'warning': str(e)})
+
+    try:
+        result = parse_json_object(content)
+    except RuntimeError as e:
+        return jsonify({'stops': [], 'warning': str(e)})
+    stops = result.get('stops', [])
+    if not isinstance(stops, list):
+        stops = []
+    stops = normalize_and_clamp_stops(stops, trip_day_count=trip_day_count)
 
     # Geocode every stop using Photon (real OSM coordinates)
     stops = geocode_stops(stops, destination or trip_name)
@@ -338,11 +505,6 @@ def suggest_stops():
     if not prompt:
         return jsonify({'error': 'No prompt provided'}), 400
 
-    try:
-        client = get_groq_client()
-    except RuntimeError as e:
-        return jsonify({'stops': [], 'warning': str(e)})
-
     current = ', '.join(s['name'] for s in current_stops if s.get('name'))
     system_prompt = (
         'You are a trip planning assistant helping edit an itinerary. '
@@ -355,23 +517,28 @@ def suggest_stops():
         'Do NOT include lat or lng. Return only valid JSON.'
     )
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL_ID,
-        messages=[
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user', 'content': (
-                f'Trip: {trip_name}\n'
-                f'Destination: {destination}\n'
-                f'Current stops: {current}\n'
-                f'User request: {prompt}'
-            )},
-        ],
-        response_format={'type': 'json_object'},
-        temperature=0.4,
-        max_tokens=1024,
-    )
+    try:
+        content = openrouter_chat_completion(
+            messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': (
+                    f'Trip: {trip_name}\n'
+                    f'Destination: {destination}\n'
+                    f'Current stops: {current}\n'
+                    f'User request: {prompt}'
+                )},
+            ],
+            response_format={'type': 'json_object'},
+            temperature=0.4,
+            max_tokens=1024,
+        )
+    except RuntimeError as e:
+        return jsonify({'stops': [], 'warning': str(e)})
 
-    result  = json.loads(response.choices[0].message.content)
+    try:
+        result = parse_json_object(content)
+    except RuntimeError as e:
+        return jsonify({'stops': [], 'warning': str(e)})
     stops   = result.get('stops', [])
     stops   = geocode_stops(stops, destination or trip_name)
     return jsonify({'stops': stops})
@@ -389,15 +556,9 @@ def explore_places():
     if not destination:
         return jsonify({'places': [], 'warning': 'No destination provided'})
 
-    try:
-        client = get_groq_client()
-    except RuntimeError as e:
-        return jsonify({'places': [], 'warning': str(e)})
-
     current = ', '.join(s['name'] for s in current_stops if s.get('name'))
     filter_hint = f' Focus on: {category}.' if category else ''
     interest_hint = f' User interests: {", ".join(interests)}.' if interests else ''
-
     system_prompt = (
         'You are a travel recommendation assistant. '
         'Return valid JSON with a "places" array of 6-8 recommended places. '
@@ -411,21 +572,26 @@ def explore_places():
         'Return only valid JSON. Avoid places already in the current itinerary.'
     )
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL_ID,
-        messages=[
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user', 'content': (
-                f'Destination: {destination}.{filter_hint}{interest_hint}\n'
-                f'Already in itinerary: {current}'
-            )},
-        ],
-        response_format={'type': 'json_object'},
-        temperature=0.5,
-        max_tokens=1200,
-    )
+    try:
+        content = openrouter_chat_completion(
+            messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': (
+                    f'Destination: {destination}.{filter_hint}{interest_hint}\n'
+                    f'Already in itinerary: {current}'
+                )},
+            ],
+            response_format={'type': 'json_object'},
+            temperature=0.5,
+            max_tokens=1200,
+        )
+    except RuntimeError as e:
+        return jsonify({'places': [], 'warning': str(e)})
 
-    result = json.loads(response.choices[0].message.content)
+    try:
+        result = parse_json_object(content)
+    except RuntimeError as e:
+        return jsonify({'places': [], 'warning': str(e)})
     places = result.get('places', [])
     places = geocode_stops(places, destination)
     return jsonify({'places': places})
