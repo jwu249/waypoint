@@ -5,13 +5,12 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { hashColor, formatDateRange, normalizeTripStatus, STATUS_LABELS } from '../lib/tripPresentation';
 
-const FILTERS = ['all', 'current', 'upcoming', 'past', 'shared'];
+const FILTERS = ['all', 'current', 'upcoming', 'past'];
 const FILTER_LABELS = {
   all: 'All',
   current: 'Current',
   upcoming: 'Future',
   past: 'Past',
-  shared: 'Shared',
 };
 
 function AvatarStack({ collaborators }) {
@@ -194,7 +193,6 @@ export default function Library() {
     current: trips.filter((trip) => normalizeTripStatus(trip) === 'current').length,
     upcoming: trips.filter((trip) => normalizeTripStatus(trip) === 'upcoming').length,
     past: trips.filter((trip) => normalizeTripStatus(trip) === 'past').length,
-    shared: sharedTrips.length,
   };
 
   const activeFilter = filter !== 'all' ? filter : sideFilter !== 'all' ? sideFilter : 'all';
@@ -274,15 +272,12 @@ export default function Library() {
             <h1 className="page-title">
               {activeFilter === 'all'
                 ? 'All trips'
-                : activeFilter === 'shared'
-                  ? 'Shared with me'
-                  : `${FILTER_LABELS[activeFilter]} trips`}
+                : `${FILTER_LABELS[activeFilter]} trips`}
             </h1>
             <p className="page-subtitle">
               {trips.length} trips
               {counts.current > 0 ? ` · ${counts.current} current` : ''}
               {counts.upcoming > 0 ? ` · ${counts.upcoming} future` : ''}
-              {sharedTrips.length > 0 ? ` · ${sharedTrips.length} shared` : ''}
             </p>
           </div>
           <Link to="/new" className="shell-btn">

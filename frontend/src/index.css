@@ -3099,12 +3099,6 @@ textarea {
   margin-bottom: 28px;
 }
 
-.explore-general-searchbar {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .explore-general-hero {
   display: grid;
   grid-template-columns: 1.2fr 1fr;
@@ -3127,12 +3121,6 @@ textarea {
 .explore-general-hero-map .thumb-map-empty {
   height: 100%;
   border-radius: 0;
-}
-
-.explore-general-featured-tag {
-  position: absolute;
-  top: 18px;
-  left: 18px;
 }
 
 .explore-general-hero-copy {
@@ -3207,12 +3195,6 @@ textarea {
 
 .explore-trip-idea-card {
   padding: 14px;
-}
-
-.explore-trip-idea-tag {
-  position: absolute;
-  top: 10px;
-  left: 10px;
 }
 
 .explore-trip-idea-card .trip-card-map {

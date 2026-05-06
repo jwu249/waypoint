@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { MapContainer, Marker, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import BrandMark from '../components/BrandMark';
@@ -177,6 +177,7 @@ function MapAutoFit({ stops }) {
 }
 
 export default function TripInput() {
+  const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
   const destinationAbortRef = useRef(null);
@@ -207,6 +208,16 @@ export default function TripInput() {
   const [saving, setSaving] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [openOptionalSection, setOpenOptionalSection] = useState('');
+
+  useEffect(() => {
+    const seed = location.state?.seedTripTemplate;
+    if (!seed) return;
+
+    setTripName((current) => current || seed.tripName || '');
+    setDestination((current) => current || seed.destination || '');
+    setRawText((current) => current || seed.rawText || '');
+    setInterests((current) => (current.length > 0 ? current : seed.interests || []));
+  }, [location.state]);
 
   const revealRef = useRef(null);
   const autoSaveTriggeredRef = useRef(false);
