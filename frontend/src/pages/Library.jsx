@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import TripMapThumbnail from '../components/TripMapThumbnail';
 import { supabase } from '../lib/supabase';
@@ -38,14 +38,32 @@ function AvatarStack({ collaborators }) {
   );
 }
 
-function TripCard({ trip, stopCoords }) {
+function TripCard({ trip, stopCoords, onDelete }) {
   const navigate = useNavigate();
   const collaborators = trip.collaborators || [];
   const normalizedStatus = normalizeTripStatus(trip);
   const statusLabel = STATUS_LABELS[normalizedStatus] ?? normalizedStatus;
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!confirming) return;
+    function handleOutside(e) {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setConfirming(false);
+    }
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [confirming]);
+
+  async function handleDelete(e) {
+    e.stopPropagation();
+    setDeleting(true);
+    await onDelete(trip.id);
+  }
 
   return (
-    <article className="trip-card" onClick={() => navigate(`/trip/${trip.id}`)}>
+    <article className="trip-card" onClick={() => !confirming && navigate(`/trip/${trip.id}`)}>
       <div className="trip-card-map">
         <TripMapThumbnail stops={stopCoords} />
       </div>
@@ -67,7 +85,41 @@ function TripCard({ trip, stopCoords }) {
           <div className="trip-card-meta">
             <span>{trip.stop_count} stop{trip.stop_count !== 1 ? 's' : ''}</span>
           </div>
-          <AvatarStack collaborators={collaborators} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <AvatarStack collaborators={collaborators} />
+            {!trip.isShared && (
+              <div ref={menuRef} style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+                {confirming ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Delete?</span>
+                    <button
+                      className="shell-btn shell-btn-sm danger"
+                      onClick={handleDelete}
+                      disabled={deleting}
+                      style={{ padding: '3px 8px', fontSize: 12 }}
+                    >
+                      {deleting ? '…' : 'Yes'}
+                    </button>
+                    <button
+                      className="shell-btn shell-btn-ghost shell-btn-sm"
+                      onClick={() => setConfirming(false)}
+                      style={{ padding: '3px 8px', fontSize: 12 }}
+                    >
+                      No
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="trip-card-menu-btn"
+                    onClick={() => setConfirming(true)}
+                    title="Trip options"
+                  >
+                    ···
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </article>
@@ -204,6 +256,12 @@ export default function Library() {
 
   const recentTrips = [...trips].slice(0, 4);
 
+  async function deleteTrip(tripId) {
+    await supabase.from('trips').delete().eq('id', tripId);
+    setTrips((prev) => prev.filter((t) => t.id !== tripId));
+    setSharedTrips((prev) => prev.filter((t) => t.id !== tripId));
+  }
+
   function setActiveFilter(nextFilter) {
     setFilter(nextFilter);
     setSideFilter(nextFilter);
@@ -322,6 +380,7 @@ export default function Library() {
                 key={trip.id}
                 trip={{ ...trip, collaborators: collabMap[trip.id] || [] }}
                 stopCoords={coordMap[trip.id] || []}
+                onDelete={deleteTrip}
               />
             ))}
           </div>

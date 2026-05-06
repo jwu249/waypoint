@@ -1533,6 +1533,25 @@ textarea {
   margin-top: 10px;
 }
 
+.trip-card-menu-btn {
+  display: none;
+  padding: 2px 6px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+.trip-card-menu-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.trip-card:hover .trip-card-menu-btn {
+  display: inline-flex;
+}
+
 .trip-card-meta {
   gap: 6px;
 }
