@@ -67,11 +67,25 @@ export function formatDateRange(start, end) {
   const startDate = new Date(start);
   const endDate = new Date(end);
 
+  if (startDate.getTime() === endDate.getTime()) {
+    return format(start, true);
+  }
+
   if (startDate.getFullYear() !== endDate.getFullYear()) {
     return `${format(start, true)} – ${format(end, true)}`;
   }
 
   return `${format(start)} – ${format(end, true)}`;
+}
+
+export function getTripDayCount(startDate, endDate) {
+  const start = toDateOnly(startDate);
+  const end = toDateOnly(endDate || startDate);
+
+  if (!start || !end || end < start) return null;
+
+  const millisecondsPerDay = 24 * 60 * 60 * 1000;
+  return Math.floor((end.getTime() - start.getTime()) / millisecondsPerDay) + 1;
 }
 
 export function getDayDate(startDate, day) {

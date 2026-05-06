@@ -3,13 +3,17 @@ import { Link, useParams } from 'react-router-dom';
 import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import CategoryIcon from '../components/CategoryIcon';
+import TripExplorePanel from '../components/TripExplorePanel';
+import { searchPlaces } from '../lib/placeSearch';
 import { supabase } from '../lib/supabase';
 import { useNav } from '../context/NavContext';
 import {
   categoryLabel,
   createNumberedPin,
+  formatDateRange,
   getCategoryMeta,
   getDayDate,
+  getTripDayCount,
   totalKm,
 } from '../lib/tripPresentation';
 
@@ -165,7 +169,40 @@ function formatStopTimeRange(start, end) {
   return `${cleanStart} - ${cleanEnd}`;
 }
 
-function EditStopForm({ stop, onChange, onSave, onCancel }) {
+function sortStopsByDayAndPosition(items) {
+  return [...items].sort((left, right) => {
+    const dayDelta = (left.day ?? 1) - (right.day ?? 1);
+    if (dayDelta !== 0) return dayDelta;
+
+    const positionDelta = (left.position ?? 0) - (right.position ?? 0);
+    if (positionDelta !== 0) return positionDelta;
+
+    return String(left.id ?? '').localeCompare(String(right.id ?? ''));
+  });
+}
+
+function normalizeDateDraft(trip) {
+  return {
+    startDate: trip?.start_date || '',
+    endDate: trip?.end_date || '',
+  };
+}
+
+function addDaysToIsoDate(value, daysToAdd) {
+  if (!value) return '';
+  const next = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(next.getTime())) return '';
+  next.setDate(next.getDate() + daysToAdd);
+  return next.toISOString().slice(0, 10);
+}
+
+function getCardDropIndex(event, index) {
+  const bounds = event.currentTarget.getBoundingClientRect();
+  const offset = event.clientY - bounds.top;
+  return offset > bounds.height / 2 ? index + 1 : index;
+}
+
+function EditStopForm({ stop, onChange, onSave, onCancel, onDelete }) {
   return (
     <div className="edit-stop-form" onClick={(event) => event.stopPropagation()}>
       <div className="edit-stop-static">
@@ -206,9 +243,224 @@ function EditStopForm({ stop, onChange, onSave, onCancel }) {
         <button className="shell-btn shell-btn-ghost shell-btn-sm" onClick={onCancel}>
           Cancel
         </button>
+        <button className="shell-btn shell-btn-ghost shell-btn-sm danger" onClick={onDelete}>
+          Delete
+        </button>
       </div>
     </div>
   );
+}
+
+function ItineraryDateEditor({
+  open,
+  dateDraft,
+  dateError,
+  dateSaving,
+  onChange,
+  onSave,
+  onCancel,
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="detail-rail-date-editor">
+      <div className="form-grid two-up detail-rail-date-grid">
+        <label className="form-label">
+          <span className="form-label-text">Start</span>
+          <input
+            className="form-input"
+            type="date"
+            value={dateDraft.startDate}
+            onChange={(event) => onChange('startDate', event.target.value)}
+          />
+        </label>
+        <label className="form-label">
+          <span className="form-label-text">End</span>
+          <input
+            className="form-input"
+            type="date"
+            value={dateDraft.endDate}
+            min={dateDraft.startDate || undefined}
+            onChange={(event) => onChange('endDate', event.target.value)}
+          />
+        </label>
+      </div>
+
+      {dateError && <div className="banner banner-error">{dateError}</div>}
+
+      <div className="detail-rail-date-actions">
+        <button
+          className="shell-btn shell-btn-sm"
+          onClick={onSave}
+          disabled={dateSaving}
+        >
+          {dateSaving ? 'Saving…' : 'Save dates'}
+        </button>
+        <button
+          className="shell-btn shell-btn-ghost shell-btn-sm"
+          onClick={onCancel}
+          disabled={dateSaving}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AddStopComposer({
+  open,
+  panelRef,
+  inputRef,
+  composerText,
+  composerResults,
+  composerSelected,
+  composerSearching,
+  composerDay,
+  composerError,
+  composerLoading,
+  visibleDays,
+  onTextChange,
+  onSelectIndex,
+  onChoosePlace,
+  onSetDay,
+  onClose,
+  onSubmit,
+}) {
+  if (!open) return null;
+
+  return (
+    <div ref={panelRef} className="panel-card add-stop-panel">
+      <div className="panel-header-row">
+        <div className="panel-title">Add a stop</div>
+        <button className="composer-close" onClick={onClose}>
+          esc to close
+        </button>
+      </div>
+
+      <input
+        ref={inputRef}
+        className="form-input composer-input"
+        value={composerText}
+        onChange={(event) => onTextChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            onSelectIndex(Math.min(composerSelected + 1, Math.max(composerResults.length - 1, 0)));
+          } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            onSelectIndex(Math.max(composerSelected - 1, 0));
+          } else if (event.key === 'Enter') {
+            onSubmit();
+          } else if (event.key === 'Escape') {
+            onClose();
+          }
+        }}
+      />
+
+      {composerText.trim() !== '' && (
+        <div className="composer-suggestions">
+          {composerSearching ? (
+            <div className="composer-suggestion muted">Searching…</div>
+          ) : composerResults.length > 0 ? (
+            composerResults.map((place, index) => {
+              const category = getCategoryMeta(place.category);
+              return (
+                <button
+                  key={`${place.name}-${place.address}-${index}`}
+                  className={`composer-suggestion ${composerSelected === index ? 'active' : ''}`}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    onSelectIndex(index);
+                  }}
+                  onClick={() => onChoosePlace(place)}
+                >
+                  <CategoryIcon kind={category.icon} size={14} />
+                  <div className="composer-suggestion-copy">
+                    <div className="composer-suggestion-name">{place.name}</div>
+                    <div className="composer-suggestion-meta">
+                      {place.address}
+                      {place.rating ? ` · ★ ${place.rating}` : ''}
+                    </div>
+                  </div>
+                  {composerSelected === index && <span className="composer-suggestion-enter">↵</span>}
+                </button>
+              );
+            })
+          ) : (
+            <div className="composer-suggestion active">
+              <CategoryIcon kind="other" size={14} />
+              <div className="composer-suggestion-copy">
+                <div className="composer-suggestion-name">{composerText.trim()}</div>
+                <div className="composer-suggestion-meta">Add as a custom stop</div>
+              </div>
+              <span className="composer-suggestion-enter">↵</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="chip-row">
+        <span className="panel-hint">Add to:</span>
+        {visibleDays.map((day) => (
+          <button
+            key={day}
+            className={`tag ${composerDay === day ? 'tag-earth' : 'tag-outline'}`}
+            onClick={() => onSetDay(day)}
+          >
+            Day {day}
+          </button>
+        ))}
+      </div>
+
+      {composerError && <div className="banner banner-error">{composerError}</div>}
+
+      <div className="composer-footer">
+        <div className="composer-footer-actions">
+          <button
+            className="shell-btn shell-btn-sm"
+            onClick={onSubmit}
+            disabled={composerLoading || composerSearching || !composerText.trim()}
+          >
+            {composerLoading ? 'Adding…' : 'Add stop'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function buildStopInsertPayload({
+  place = null,
+  name = '',
+  day = 1,
+  destination = '',
+}) {
+  if (place) {
+    return {
+      name: place.name,
+      address: place.address ?? null,
+      day,
+      notes: null,
+      category: place.category ?? 'other',
+      lat: place.lat ?? null,
+      lng: place.lng ?? null,
+      stop_time: null,
+      duration_minutes: null,
+    };
+  }
+
+  return {
+    name: name.trim(),
+    address: destination || null,
+    day,
+    notes: null,
+    category: 'other',
+    lat: null,
+    lng: null,
+    stop_time: null,
+    duration_minutes: null,
+  };
 }
 
 export default function Itinerary() {
@@ -216,6 +468,9 @@ export default function Itinerary() {
   const { setTripName, setTripHref, setOnShare } = useNav();
   const markerRefs = useRef({});
   const composerAbortRef = useRef(null);
+  const composerPanelRef = useRef(null);
+  const composerInputRef = useRef(null);
+  const draggingStopIdRef = useRef(null);
 
   const [trip, setTrip] = useState(null);
   const [stops, setStops] = useState([]);
@@ -232,8 +487,21 @@ export default function Itinerary() {
   const [composerResults, setComposerResults] = useState([]);
   const [composerSelected, setComposerSelected] = useState(0);
   const [composerSearching, setComposerSearching] = useState(false);
+  const [composerChosenPlace, setComposerChosenPlace] = useState(null);
   const [draggingStopId, setDraggingStopId] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
+  const [dateEditorOpen, setDateEditorOpen] = useState(false);
+  const [dateDraft, setDateDraft] = useState({ startDate: '', endDate: '' });
+  const [dateSaving, setDateSaving] = useState(false);
+  const [dateError, setDateError] = useState('');
+  const highestStopDay = stops.reduce((max, stop) => Math.max(max, stop.day ?? 1), 1);
+  const tripDayCount = getTripDayCount(trip?.start_date, trip?.end_date);
+  const visibleDayCount = Math.max(tripDayCount ?? 0, highestStopDay, 1);
+  const visibleDays = Array.from({ length: visibleDayCount }, (_, index) => index + 1);
+  const visibleDayKey = visibleDays.join('|');
+  const tripDateRange = formatDateRange(trip?.start_date, trip?.end_date);
+  const activeStopObject = stops.find((stop) => stop.id === activeStop);
+  const showInteractiveMap = stops.some((stop) => stop.lat && stop.lng);
 
   useEffect(() => {
     let ignore = false;
@@ -256,7 +524,7 @@ export default function Itinerary() {
         setOnShare(() => () => setShareOpen(true));
       }
 
-      const loadedStops = stopsData ?? [];
+      const loadedStops = sortStopsByDayAndPosition(stopsData ?? []);
       setStops(loadedStops);
 
       if (loadedStops.length > 0) {
@@ -264,7 +532,7 @@ export default function Itinerary() {
         setExpandedDays(new Set([days[0]]));
         setComposerDay(days[0]);
       } else {
-        setExpandedDays(new Set());
+        setExpandedDays(new Set([1]));
         setComposerDay(1);
       }
 
@@ -285,6 +553,23 @@ export default function Itinerary() {
   }, [setOnShare, setTripHref, setTripName]);
 
   useEffect(() => {
+    setDateDraft(normalizeDateDraft(trip));
+  }, [trip?.start_date, trip?.end_date]);
+
+  useEffect(() => {
+    const allowedDays = new Set(visibleDays);
+
+    setExpandedDays((current) => {
+      const next = [...current].filter((day) => allowedDays.has(day));
+      const same =
+        next.length === current.size && next.every((day) => current.has(day));
+      return same ? current : new Set(next);
+    });
+
+    setComposerDay((current) => (allowedDays.has(current) ? current : visibleDays[0]));
+  }, [visibleDayKey]);
+
+  useEffect(() => {
     Object.entries(markerRefs.current).forEach(([stopId, marker]) => {
       if (!marker) return;
 
@@ -297,8 +582,10 @@ export default function Itinerary() {
   }, [activeStop]);
 
   useEffect(() => {
+    const currentMarkers = markerRefs.current;
+
     return () => {
-      Object.values(markerRefs.current).forEach((marker) => {
+      Object.values(currentMarkers).forEach((marker) => {
         marker?.closePopup();
       });
     };
@@ -326,6 +613,17 @@ export default function Itinerary() {
       return undefined;
     }
 
+    if (composerChosenPlace && query === (composerChosenPlace.name || '').trim()) {
+      setComposerResults([composerChosenPlace]);
+      setComposerSelected(0);
+      setComposerSearching(false);
+      if (composerAbortRef.current) {
+        composerAbortRef.current.abort();
+        composerAbortRef.current = null;
+      }
+      return undefined;
+    }
+
     if (composerAbortRef.current) {
       composerAbortRef.current.abort();
     }
@@ -336,13 +634,9 @@ export default function Itinerary() {
 
     const timer = window.setTimeout(async () => {
       try {
-        const response = await fetch(
-          `/api/place-search?q=${encodeURIComponent(query)}&destination=${encodeURIComponent(trip?.destination || '')}`,
-          { signal: controller.signal }
-        );
-        const data = await response.json();
+        const places = await searchPlaces(query, trip?.destination || '', controller.signal);
         if (controller.signal.aborted) return;
-        setComposerResults(data.places ?? []);
+        setComposerResults(places);
         setComposerSelected(0);
       } catch (fetchError) {
         if (fetchError.name === 'AbortError') return;
@@ -358,7 +652,7 @@ export default function Itinerary() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [composerOpen, composerText, trip?.destination]);
+  }, [composerChosenPlace, composerOpen, composerText, trip?.destination]);
 
   async function deleteStop(stopId) {
     await supabase.from('stops').delete().eq('id', stopId);
@@ -384,43 +678,133 @@ export default function Itinerary() {
     setEditingStop(null);
   }
 
+  function scrollComposerIntoView() {
+    window.requestAnimationFrame(() => {
+      composerPanelRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+      composerInputRef.current?.focus();
+    });
+  }
+
+  function openComposer(day = 1) {
+    setComposerDay(day);
+    setComposerError('');
+    setComposerResults([]);
+    setComposerSelected(0);
+    setComposerSearching(false);
+    setComposerChosenPlace(null);
+    setComposerOpen(true);
+    scrollComposerIntoView();
+  }
+
+  function closeComposer() {
+    if (composerAbortRef.current) {
+      composerAbortRef.current.abort();
+      composerAbortRef.current = null;
+    }
+
+    setComposerOpen(false);
+    setComposerText('');
+    setComposerResults([]);
+    setComposerSelected(0);
+    setComposerSearching(false);
+    setComposerChosenPlace(null);
+    setComposerError('');
+  }
+
+  function openDateEditor() {
+    setDateDraft(normalizeDateDraft(trip));
+    setDateError('');
+    setDateEditorOpen(true);
+  }
+
+  function closeDateEditor() {
+    setDateDraft(normalizeDateDraft(trip));
+    setDateError('');
+    setDateEditorOpen(false);
+  }
+
+  function updateDateDraft(field, value) {
+    setDateDraft((current) => ({
+      ...current,
+      [field]: value,
+    }));
+    setDateError('');
+  }
+
+  async function saveTripDates() {
+    const startDate = dateDraft.startDate;
+    const endDate = dateDraft.endDate;
+
+    if (!startDate || !endDate) {
+      setDateError('Set both a start and end date before saving.');
+      return;
+    }
+
+    if (endDate < startDate) {
+      setDateError('End date cannot be earlier than the start date.');
+      return;
+    }
+
+    const minimumEndDate = addDaysToIsoDate(startDate, highestStopDay - 1);
+    if (minimumEndDate && endDate < minimumEndDate) {
+      setDateError(`End date must be at least ${minimumEndDate} to cover Day ${highestStopDay}.`);
+      return;
+    }
+
+    setDateSaving(true);
+    setDateError('');
+
+    try {
+      const { data, error } = await supabase
+        .from('trips')
+        .update({
+          start_date: startDate,
+          end_date: endDate,
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        setTrip(data);
+      } else {
+        setTrip((current) => ({
+          ...current,
+          start_date: startDate,
+          end_date: endDate,
+        }));
+      }
+
+      setDateEditorOpen(false);
+    } catch (saveError) {
+      setDateError(saveError.message || 'Unable to save trip dates right now.');
+    } finally {
+      setDateSaving(false);
+    }
+  }
+
   async function handleAddStop() {
-    if (!composerText.trim()) return;
+    if (composerSearching || !composerText.trim()) return;
     setComposerLoading(true);
     setComposerError('');
 
     try {
-      const chosenPlace = composerResults[composerSelected] ?? null;
-      const stopToInsert = chosenPlace
-        ? {
-            name: chosenPlace.name,
-            address: chosenPlace.address ?? null,
-            day: composerDay,
-            notes: chosenPlace.description || null,
-            category: chosenPlace.category ?? 'other',
-            lat: chosenPlace.lat ?? null,
-            lng: chosenPlace.lng ?? null,
-            stop_time: null,
-            duration_minutes: null,
-          }
-        : {
-            name: composerText.trim(),
-            address: trip?.destination ?? null,
-            day: composerDay,
-            notes: null,
-            category: 'other',
-            lat: null,
-            lng: null,
-            stop_time: null,
-            duration_minutes: null,
-          };
+      const chosenPlace = composerChosenPlace ?? composerResults[composerSelected] ?? null;
+      const stopToInsert = buildStopInsertPayload({
+        place: chosenPlace,
+        name: composerText,
+        day: composerDay,
+        destination: trip?.destination || '',
+      });
 
       await insertStop(stopToInsert);
 
-      setComposerText('');
-      setComposerOpen(false);
-      setComposerResults([]);
-      setComposerSelected(0);
+      closeComposer();
     } catch (requestError) {
       setComposerError(requestError.message || 'Unable to add a stop right now.');
     } finally {
@@ -429,7 +813,8 @@ export default function Itinerary() {
   }
 
   async function insertStop(stopToInsert) {
-    const nextPosition = stops.length;
+    const targetDay = stopToInsert.day ?? composerDay;
+    const nextPosition = stops.filter((stop) => (stop.day ?? 1) === targetDay).length;
     const { data: newStop, error } = await supabase
       .from('stops')
       .insert({
@@ -451,9 +836,13 @@ export default function Itinerary() {
     if (error) throw error;
 
     if (newStop) {
-      setStops((current) => [...current, newStop]);
-      setExpandedDays((current) => new Set([...current, composerDay]));
+      setStops((current) => sortStopsByDayAndPosition([...current, newStop]));
+      setExpandedDays((current) => new Set([...current, targetDay]));
     }
+  }
+
+  async function addSuggestedPlace(place, day) {
+    await insertStop(buildStopInsertPayload({ place, day }));
   }
 
   async function moveStop(stopId, targetDay, targetIndex) {
@@ -510,12 +899,14 @@ export default function Itinerary() {
     } catch {
       setStops(previousStops);
     } finally {
+      draggingStopIdRef.current = null;
       setDraggingStopId(null);
       setDropTarget(null);
     }
   }
 
   function beginDrag(stopId) {
+    draggingStopIdRef.current = stopId;
     setDraggingStopId(stopId);
     setDropTarget(null);
     if (activeStop === stopId) {
@@ -524,24 +915,36 @@ export default function Itinerary() {
   }
 
   function allowDrop(event, day, index) {
+    if (!event.dataTransfer.types.includes('text/plain')) return;
     event.preventDefault();
-    if (!draggingStopId) return;
+    event.dataTransfer.dropEffect = 'move';
+    setExpandedDays((current) => (current.has(day) ? current : new Set([...current, day])));
     setDropTarget({ day, index });
   }
 
   function allowDropOnCard(event, day, index) {
+    if (!event.dataTransfer.types.includes('text/plain')) return;
     event.preventDefault();
-    if (!draggingStopId) return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const offset = event.clientY - bounds.top;
-    const targetIndex = offset > bounds.height / 2 ? index + 1 : index;
+    event.dataTransfer.dropEffect = 'move';
+    setExpandedDays((current) => (current.has(day) ? current : new Set([...current, day])));
+    const targetIndex = getCardDropIndex(event, index);
     setDropTarget({ day, index: targetIndex });
   }
 
   function handleDrop(event, day, index) {
     event.preventDefault();
-    if (!draggingStopId) return;
-    moveStop(draggingStopId, day, index);
+    event.stopPropagation();
+    const stopId = Number(event.dataTransfer.getData('text/plain')) || draggingStopIdRef.current;
+    if (!stopId) return;
+    moveStop(stopId, day, index);
+  }
+
+  function handleCardDrop(event, day, index) {
+    event.preventDefault();
+    event.stopPropagation();
+    const stopId = Number(event.dataTransfer.getData('text/plain')) || draggingStopIdRef.current;
+    if (!stopId) return;
+    moveStop(stopId, day, getCardDropIndex(event, index));
   }
 
   function toggleDay(day) {
@@ -552,10 +955,6 @@ export default function Itinerary() {
       return next;
     });
   }
-
-  const days = [...new Set(stops.map((stop) => stop.day ?? 1))].sort((a, b) => a - b);
-  const visibleDays = days.length > 0 ? days : [1];
-  const activeStopObject = stops.find((stop) => stop.id === activeStop);
 
   if (loading) return <div className="loading-state">Loading itinerary…</div>;
 
@@ -594,19 +993,37 @@ export default function Itinerary() {
           <div className="detail-rail-header">
             <div className="detail-rail-titleblock">
               <h1 className="section-title">Itinerary</h1>
-              <p className="detail-rail-meta">
-                {stops.length} stop{stops.length !== 1 ? 's' : ''}
-                {stops.some((stop) => stop.lat && stop.lng) ? ` · ${totalKm(stops)} km` : ''}
-                {trip.start_date ? ` · ${new Date(trip.start_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
-                {trip.end_date ? ` – ${new Date(trip.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
-              </p>
+              <div className="detail-rail-meta-row">
+                <div className="detail-rail-meta">
+                  <span>
+                    {stops.length} stop{stops.length !== 1 ? 's' : ''}
+                  </span>
+                  {stops.some((stop) => stop.lat && stop.lng) && <span>· {totalKm(stops)} km</span>}
+                  <span>·</span>
+                  <button
+                    className={`detail-rail-date-trigger ${dateEditorOpen ? 'is-active' : ''}`}
+                    onClick={dateEditorOpen ? closeDateEditor : openDateEditor}
+                  >
+                    {tripDateRange || 'Set dates'}
+                  </button>
+                </div>
+              </div>
+
+              <ItineraryDateEditor
+                open={dateEditorOpen}
+                dateDraft={dateDraft}
+                dateError={dateError}
+                dateSaving={dateSaving}
+                onChange={updateDateDraft}
+                onSave={saveTripDates}
+                onCancel={closeDateEditor}
+              />
             </div>
             <div className="detail-rail-actions">
               <button
                 className={`shell-btn shell-btn-sm itinerary-add-btn ${composerOpen ? 'is-active' : ''}`}
                 onClick={() => {
-                  setComposerOpen((current) => !current);
-                  setComposerDay(visibleDays[0]);
+                  openComposer(visibleDays[0]);
                 }}
               >
                 + Add stop
@@ -614,152 +1031,54 @@ export default function Itinerary() {
             </div>
           </div>
 
-          {composerOpen && (
-            <div className="panel-card add-stop-panel">
-              <div className="panel-header-row">
-                <div className="panel-title">Add a stop</div>
-                <button
-                  className="composer-close"
-                  onClick={() => setComposerOpen(false)}
-                >
-                  esc to close
-                </button>
-              </div>
-
-              <input
-                className="form-input composer-input"
-                value={composerText}
-                onChange={(event) => setComposerText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'ArrowDown') {
-                    event.preventDefault();
-                    setComposerSelected((current) =>
-                      Math.min(current + 1, Math.max(composerResults.length - 1, 0))
-                    );
-                  } else if (event.key === 'ArrowUp') {
-                    event.preventDefault();
-                    setComposerSelected((current) => Math.max(current - 1, 0));
-                  } else if (event.key === 'Enter') {
-                    handleAddStop();
-                  } else if (event.key === 'Escape') {
-                    setComposerOpen(false);
-                  }
-                }}
-              />
-
-              {composerText.trim() !== '' && (
-                <div className="composer-suggestions">
-                  {composerSearching ? (
-                    <div className="composer-suggestion muted">Searching…</div>
-                  ) : composerResults.length > 0 ? (
-                    composerResults.map((place, index) => {
-                      const category = getCategoryMeta(place.category);
-                      return (
-                        <button
-                          key={`${place.name}-${place.address}-${index}`}
-                          className={`composer-suggestion ${composerSelected === index ? 'active' : ''}`}
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            setComposerSelected(index);
-                          }}
-                          onClick={async () => {
-                            setComposerSelected(index);
-                            setComposerLoading(true);
-                            setComposerError('');
-                            try {
-                              await insertStop({
-                                name: place.name,
-                                address: place.address ?? null,
-                                day: composerDay,
-                                notes: place.description || null,
-                                category: place.category ?? 'other',
-                                lat: place.lat ?? null,
-                                lng: place.lng ?? null,
-                                stop_time: null,
-                                duration_minutes: null,
-                              });
-                              setComposerText('');
-                              setComposerOpen(false);
-                              setComposerResults([]);
-                              setComposerSelected(0);
-                            } catch (requestError) {
-                              setComposerError(requestError.message || 'Unable to add a stop right now.');
-                            } finally {
-                              setComposerLoading(false);
-                            }
-                          }}
-                        >
-                          <CategoryIcon kind={category.icon} size={14} />
-                          <div className="composer-suggestion-copy">
-                            <div className="composer-suggestion-name">{place.name}</div>
-                            <div className="composer-suggestion-meta">
-                              {place.address}
-                              {place.rating ? ` · ★ ${place.rating}` : ''}
-                            </div>
-                          </div>
-                          {composerSelected === index && <span className="composer-suggestion-enter">↵</span>}
-                        </button>
-                      );
-                    })
-                  ) : (
-                    <>
-                      <div className="composer-suggestion active">
-                        <CategoryIcon kind="other" size={14} />
-                        <div className="composer-suggestion-copy">
-                          <div className="composer-suggestion-name">{composerText.trim()}</div>
-                          <div className="composer-suggestion-meta">Add as a custom stop</div>
-                        </div>
-                        <span className="composer-suggestion-enter">↵</span>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-
-              <div className="chip-row">
-                <span className="panel-hint">Add to:</span>
-                {visibleDays.map((day) => (
-                  <button
-                    key={day}
-                    className={`tag ${composerDay === day ? 'tag-earth' : 'tag-outline'}`}
-                    onClick={() => setComposerDay(day)}
-                  >
-                    Day {day}
-                  </button>
-                ))}
-              </div>
-
-              {composerError && <div className="banner banner-error">{composerError}</div>}
-
-              <div className="composer-footer">
-                <span className="panel-hint">Or drop a pin on the map →</span>
-                <button
-                  className="shell-btn shell-btn-sm"
-                  onClick={handleAddStop}
-                  disabled={composerLoading || !composerText.trim()}
-                >
-                  {composerLoading ? 'Adding…' : 'Add with AI'}
-                </button>
-              </div>
-            </div>
-          )}
-
           <div className="day-list">
+            <AddStopComposer
+              open={composerOpen}
+              panelRef={composerPanelRef}
+              inputRef={composerInputRef}
+              composerText={composerText}
+              composerResults={composerResults}
+              composerSelected={composerSelected}
+              composerSearching={composerSearching}
+              composerDay={composerDay}
+              composerError={composerError}
+              composerLoading={composerLoading}
+              visibleDays={visibleDays}
+              onTextChange={(value) => {
+                setComposerText(value);
+                setComposerChosenPlace(null);
+              }}
+              onSelectIndex={setComposerSelected}
+              onChoosePlace={(place) => {
+                setComposerChosenPlace(place);
+                setComposerText(place.name);
+                setComposerResults([place]);
+                setComposerSelected(0);
+              }}
+              onSetDay={setComposerDay}
+              onClose={closeComposer}
+              onSubmit={handleAddStop}
+            />
+
             {stops.length === 0 && (
               <div className="empty-inline">
                 <p>No stops yet.</p>
-                <p>Start with the add stop panel above.</p>
+                <p>Start with the add stop button above.</p>
               </div>
             )}
 
             {visibleDays.map((day) => {
               const dayStops = stops.filter((stop) => (stop.day ?? 1) === day);
-              const isOpen = expandedDays.has(day) || dayStops.length === 0;
+              const isOpen = expandedDays.has(day);
               const dayDistance = totalKm(dayStops);
               const dayDate = getDayDate(trip.start_date, day);
+              const dayIsDropTarget = Boolean(draggingStopId && dropTarget?.day === day);
 
               return (
-                <section key={day} className="day-group">
+                <section
+                  key={day}
+                  className={`day-group ${dayIsDropTarget ? 'drop-active' : ''}`}
+                >
                   <button
                     className={`day-header ${
                       draggingStopId && dropTarget?.day === day && dropTarget?.index === dayStops.length
@@ -767,6 +1086,7 @@ export default function Itinerary() {
                         : ''
                     }`}
                     onClick={() => toggleDay(day)}
+                    onDragEnter={(event) => allowDrop(event, day, dayStops.length)}
                     onDragOver={(event) => allowDrop(event, day, dayStops.length)}
                     onDrop={(event) => handleDrop(event, day, dayStops.length)}
                   >
@@ -784,12 +1104,13 @@ export default function Itinerary() {
                   </button>
 
                   {isOpen && (
-                    <div className="day-body">
-                      {draggingStopId && (
+                    <div className={`day-body ${dayIsDropTarget ? 'drop-active' : ''}`}>
+                      {draggingStopId && dayStops.length > 0 && (
                         <div
                           className={`stop-dropzone ${
                             dropTarget?.day === day && dropTarget?.index === 0 ? 'active' : ''
                           }`}
+                          onDragEnter={(event) => allowDrop(event, day, 0)}
                           onDragOver={(event) => allowDrop(event, day, 0)}
                           onDrop={(event) => handleDrop(event, day, 0)}
                         />
@@ -797,11 +1118,16 @@ export default function Itinerary() {
 
                       {dayStops.map((stop, index) => {
                         const category = getCategoryMeta(stop.category);
+
                         return (
                           <div key={stop.id}>
                             <article
                               className={`stop-card ${activeStop === stop.id ? 'active' : ''} ${
                                 draggingStopId === stop.id ? 'dragging' : ''
+                              } ${
+                                dropTarget?.day === day && dropTarget?.index === index
+                                  ? 'drop-before'
+                                  : ''
                               }`}
                               onClick={() => setActiveStop(stop.id === activeStop ? null : stop.id)}
                               draggable={editingStop?.id !== stop.id}
@@ -811,16 +1137,25 @@ export default function Itinerary() {
                                 beginDrag(stop.id);
                               }}
                               onDragEnd={() => {
+                                draggingStopIdRef.current = null;
                                 setDraggingStopId(null);
                                 setDropTarget(null);
                               }}
+                              onDragEnter={(event) => allowDropOnCard(event, day, index)}
                               onDragOver={(event) => allowDropOnCard(event, day, index)}
-                              onDrop={(event) => {
-                                if (!dropTarget) return;
-                                handleDrop(event, dropTarget.day, dropTarget.index);
-                              }}
+                              onDrop={(event) => handleCardDrop(event, day, index)}
                             >
                               <div className="stop-index">{globalIndex(stop)}</div>
+
+                              {editingStop?.id !== stop.id && (
+                                <div
+                                  className="stop-drag-handle"
+                                  aria-hidden="true"
+                                  title="Drag to reorder or move to another day"
+                                >
+                                  ⋮⋮
+                                </div>
+                              )}
 
                               <div className="stop-copy">
                                 {editingStop?.id === stop.id ? (
@@ -829,6 +1164,10 @@ export default function Itinerary() {
                                     onChange={setEditingStop}
                                     onSave={() => saveEdit(editingStop)}
                                     onCancel={() => setEditingStop(null)}
+                                    onDelete={async () => {
+                                      await deleteStop(editingStop.id);
+                                      setEditingStop(null);
+                                    }}
                                   />
                                 ) : (
                                   <>
@@ -850,18 +1189,18 @@ export default function Itinerary() {
 
                               {editingStop?.id !== stop.id && (
                                 <button
-                                className="stop-menu"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  const { start, end } = parseStopTimeRange(stop.stop_time);
-                                  setEditingStop({
-                                    ...stop,
-                                    stopTimeStart: start,
-                                    stopTimeEnd: end,
-                                  });
-                                }}
-                                title="Edit stop"
-                              >
+                                  className="stop-menu"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    const { start, end } = parseStopTimeRange(stop.stop_time);
+                                    setEditingStop({
+                                      ...stop,
+                                      stopTimeStart: start,
+                                      stopTimeEnd: end,
+                                    });
+                                  }}
+                                  title="Edit stop"
+                                >
                                   ⋯
                                 </button>
                               )}
@@ -872,6 +1211,7 @@ export default function Itinerary() {
                                 className={`stop-dropzone ${
                                   dropTarget?.day === day && dropTarget?.index === index + 1 ? 'active' : ''
                                 }`}
+                                onDragEnter={(event) => allowDrop(event, day, index + 1)}
                                 onDragOver={(event) => allowDrop(event, day, index + 1)}
                                 onDrop={(event) => handleDrop(event, day, index + 1)}
                               />
@@ -880,26 +1220,47 @@ export default function Itinerary() {
                         );
                       })}
 
-                      <button
-                        className="empty-dropzone"
-                        onClick={() => {
-                          setComposerOpen(true);
-                          setComposerDay(day);
-                        }}
-                      >
-                        + Add stop
-                      </button>
+                      {draggingStopId ? (
+                        <div
+                          className={`empty-dropzone drag-target ${
+                            dropTarget?.day === day && dropTarget?.index === dayStops.length
+                              ? 'active'
+                              : ''
+                          }`}
+                          onDragEnter={(event) => allowDrop(event, day, dayStops.length)}
+                          onDragOver={(event) => allowDrop(event, day, dayStops.length)}
+                          onDrop={(event) => handleDrop(event, day, dayStops.length)}
+                        >
+                          Drop here to move to Day {day}
+                        </div>
+                      ) : (
+                        <button
+                          className="empty-dropzone"
+                          onClick={() => {
+                            openComposer(day);
+                          }}
+                        >
+                          + Add stop
+                        </button>
+                      )}
                     </div>
                   )}
                 </section>
               );
             })}
+
+            <TripExplorePanel
+              trip={trip}
+              stops={stops}
+              dayOptions={visibleDays}
+              onAddPlace={addSuggestedPlace}
+            />
           </div>
         </aside>
 
         <section className="map-stage">
-          {stops.some((stop) => stop.lat && stop.lng) ? (
-            <MapContainer center={[37.7749, -122.4194]} zoom={12} className="full-map">
+          {showInteractiveMap ? (
+            <MapContainer center={[20, 0]} zoom={12} className="full-map">
               <TileLayer
                 url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
                 attribution="© OpenStreetMap © CARTO"
@@ -916,7 +1277,10 @@ export default function Itinerary() {
                     position={[stop.lat, stop.lng]}
                     icon={createNumberedPin(index + 1, { active: activeStop === stop.id })}
                     eventHandlers={{
-                      click: () => setActiveStop(stop.id),
+                      click: () => {
+                        if (composerOpen) return;
+                        setActiveStop(stop.id);
+                      },
                       popupclose: () => {
                         setActiveStop((current) => (current === stop.id ? null : current));
                       },
@@ -1016,21 +1380,6 @@ export default function Itinerary() {
           ) : (
             <div className="map-empty">
               Stop locations appear here once coordinates are added.
-            </div>
-          )}
-
-          {composerOpen && (
-            <div className="map-hint-card">
-              <CategoryIcon
-                kind={getCategoryMeta(composerResults[composerSelected]?.category ?? 'attraction').icon}
-                size={14}
-                color="var(--mother-earth)"
-              />
-              <span>
-                {(composerResults[composerSelected]?.name || composerText || 'Kiyomizu-dera')}
-                {' · '}
-                tap map to place
-              </span>
             </div>
           )}
 

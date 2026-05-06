@@ -9,8 +9,6 @@ export default function Navbar({ tripName, tripHref }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const tripId = tripHref?.startsWith('/trip/') ? tripHref.slice('/trip/'.length) : '';
-  const exploreHref = tripId ? `/explore?tripId=${tripId}` : '/explore';
 
   const initial = (
     user?.user_metadata?.display_name?.[0] ||
@@ -54,7 +52,7 @@ export default function Navbar({ tripName, tripHref }) {
           <Link to="/analytics" className={`topbar-link ${isAnalytics ? 'active' : ''}`}>
             Analytics
           </Link>
-          <Link to={exploreHref} className={`topbar-link ${isExplore ? 'active' : ''}`}>
+          <Link to="/explore" className={`topbar-link ${isExplore ? 'active' : ''}`}>
             Explore
           </Link>
         </div>

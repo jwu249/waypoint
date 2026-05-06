@@ -15,6 +15,7 @@ CORS(app, origins=[
 ])
 
 GROQ_MODEL_ID = 'meta-llama/llama-4-scout-17b-16e-instruct'
+REQUEST_HEADERS = {'User-Agent': 'Waypoint/1.0 (travel itinerary app)'}
 
 
 def geocode_destination(destination):
@@ -25,7 +26,7 @@ def geocode_destination(destination):
         resp = http_requests.get(
             'https://photon.komoot.io/api/',
             params={'q': destination, 'limit': 1, 'lang': 'en'},
-            headers={'User-Agent': 'Waypoint/1.0 (travel itinerary app)'},
+            headers=REQUEST_HEADERS,
             timeout=6,
         )
         features = resp.json().get('features', [])
@@ -46,7 +47,7 @@ def search_destinations(query):
         resp = http_requests.get(
             'https://photon.komoot.io/api/',
             params={'q': query, 'limit': 5, 'lang': 'en'},
-            headers={'User-Agent': 'Waypoint/1.0 (travel itinerary app)'},
+            headers=REQUEST_HEADERS,
             timeout=6,
         )
         features = resp.json().get('features', [])
@@ -90,6 +91,64 @@ def search_destinations(query):
         return []
 
 
+def category_from_props(props):
+    osm_value = (props.get('osm_value') or '').lower()
+    osm_key = (props.get('osm_key') or '').lower()
+
+    if osm_value in {'restaurant', 'cafe', 'bar', 'fast_food', 'bakery', 'pub'}:
+        return 'restaurant'
+    if osm_value in {'hotel', 'hostel', 'guest_house'}:
+        return 'hotel'
+    if osm_value in {'bus_stop', 'station', 'tram_stop', 'ferry_terminal'}:
+        return 'transport'
+    if osm_value in {'museum', 'gallery', 'cinema', 'park', 'viewpoint'}:
+        return 'activity'
+    if osm_key in {'tourism', 'historic', 'leisure', 'amenity', 'shop', 'building'}:
+        return 'attraction'
+    return 'other'
+
+
+def compose_feature_address(props):
+    street = props.get('street')
+    house_number = props.get('housenumber')
+    locality = props.get('city') or props.get('district') or props.get('county') or props.get('state')
+    country = props.get('country')
+    address_parts = [
+        ' '.join(part for part in [house_number, street] if part).strip() or None,
+        locality,
+        country,
+    ]
+    return ', '.join(part for part in address_parts if part)
+
+
+def place_from_feature(feature, fallback_name='', fallback_address=''):
+    props = feature.get('properties', {})
+    coords = feature.get('geometry', {}).get('coordinates', [None, None])
+    address = compose_feature_address(props)
+    name = (
+        props.get('name')
+        or ' '.join(part for part in [props.get('housenumber'), props.get('street')] if part).strip()
+        or props.get('street')
+        or props.get('district')
+        or props.get('city')
+        or fallback_name
+        or 'Untitled stop'
+    )
+
+    category = category_from_props(props)
+    rating_hint = 4.7 if category == 'attraction' else 4.5
+
+    return {
+        'name': name,
+        'address': address or fallback_address or None,
+        'category': category,
+        'description': props.get('osm_value') or props.get('type') or '',
+        'rating': rating_hint,
+        'lat': float(coords[1]) if coords[1] is not None else None,
+        'lng': float(coords[0]) if coords[0] is not None else None,
+    }
+
+
 def search_places(query, destination):
     """Search place suggestions near a destination using Photon."""
     if not query:
@@ -105,58 +164,18 @@ def search_places(query, destination):
             f"{bias_lng - 1.5},{bias_lat - 1.5},{bias_lng + 1.5},{bias_lat + 1.5}"
         )
 
-    def _category_from_props(props):
-        osm_value = (props.get('osm_value') or '').lower()
-        osm_key = (props.get('osm_key') or '').lower()
-
-        if osm_value in {'restaurant', 'cafe', 'bar', 'fast_food', 'bakery', 'pub'}:
-            return 'restaurant'
-        if osm_value in {'hotel', 'hostel', 'guest_house'}:
-            return 'hotel'
-        if osm_value in {'bus_stop', 'station', 'tram_stop', 'ferry_terminal'}:
-            return 'transport'
-        if osm_value in {'museum', 'gallery', 'cinema', 'park', 'viewpoint'}:
-            return 'activity'
-        if osm_key in {'tourism', 'historic', 'leisure', 'amenity', 'shop', 'building'}:
-            return 'attraction'
-        return 'other'
-
     try:
         resp = http_requests.get(
             'https://photon.komoot.io/api/',
             params=params,
-            headers={'User-Agent': 'Waypoint/1.0 (travel itinerary app)'},
+            headers=REQUEST_HEADERS,
             timeout=6,
         )
         features = resp.json().get('features', [])
         places = []
 
         for feature in features:
-            props = feature.get('properties', {})
-            coords = feature.get('geometry', {}).get('coordinates', [None, None])
-            street = props.get('street')
-            house_number = props.get('housenumber')
-            locality = props.get('city') or props.get('district') or props.get('county') or props.get('state')
-            country = props.get('country')
-            address_parts = [
-                ' '.join(part for part in [house_number, street] if part).strip() or None,
-                locality,
-                country,
-            ]
-            address = ', '.join(part for part in address_parts if part)
-            name = props.get('name') or locality or query
-
-            rating_hint = 4.7 if _category_from_props(props) == 'attraction' else 4.5
-
-            places.append({
-                'name': name,
-                'address': address or destination or None,
-                'category': _category_from_props(props),
-                'description': props.get('osm_value') or props.get('type') or '',
-                'rating': rating_hint,
-                'lat': float(coords[1]) if coords[1] is not None else None,
-                'lng': float(coords[0]) if coords[0] is not None else None,
-            })
+            places.append(place_from_feature(feature, fallback_name=query, fallback_address=destination))
 
         unique = []
         seen = set()
@@ -193,7 +212,7 @@ def geocode_stop(name, address, destination, bias_lat=None, bias_lng=None):
         resp = http_requests.get(
             'https://photon.komoot.io/api/',
             params=params,
-            headers={'User-Agent': 'Waypoint/1.0 (travel itinerary app)'},
+            headers=REQUEST_HEADERS,
             timeout=6,
         )
         features = resp.json().get('features', [])

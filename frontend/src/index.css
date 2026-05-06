@@ -352,9 +352,58 @@ textarea {
 
 .detail-rail-meta {
   margin: 4px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   font-family: var(--sans);
   font-size: 12px;
   color: var(--ink-3);
+}
+
+.detail-rail-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.detail-rail-date-trigger {
+  padding: 0 0 1px;
+  border-bottom: 1px solid rgba(81, 50, 41, 0.22);
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.2;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.detail-rail-date-trigger:hover,
+.detail-rail-date-trigger.is-active {
+  color: var(--mother-earth);
+  border-color: rgba(81, 50, 41, 0.55);
+}
+
+.detail-rail-date-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(81, 50, 41, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.detail-rail-date-grid {
+  gap: 10px;
+}
+
+.detail-rail-date-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .shell-main {
@@ -388,6 +437,10 @@ textarea {
 .panel-header-row {
   justify-content: space-between;
   gap: 16px;
+}
+
+.detail-rail-header {
+  align-items: flex-start;
 }
 
 .page-title,
@@ -2211,6 +2264,7 @@ textarea {
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .itinerary-add-btn {
@@ -2220,23 +2274,6 @@ textarea {
 .itinerary-add-btn.is-active {
   outline: 2px solid rgba(81, 50, 41, 0.3);
   outline-offset: 2px;
-}
-
-.detail-rail-status {
-  display: flex;
-  justify-content: flex-end;
-  width: 100%;
-}
-
-.status-select {
-  width: auto;
-  min-height: 28px;
-  padding: 3px 6px;
-  font-family: var(--sans);
-  border: 1px solid var(--line);
-  background: var(--bg);
-  font-size: 12px;
-  color: var(--ink-3);
 }
 
 .add-stop-panel {
@@ -2315,6 +2352,32 @@ textarea {
   margin-top: 10px;
 }
 
+.composer-footer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.detail-rail-status {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.status-select {
+  width: auto;
+  min-height: 28px;
+  padding: 3px 6px;
+  font-family: var(--sans);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
 .day-list {
   gap: 12px;
   overflow: visible;
@@ -2323,6 +2386,11 @@ textarea {
 .day-group {
   border-bottom: 1px solid var(--line);
   padding-bottom: 12px;
+  transition: border-color 160ms ease;
+}
+
+.day-group.drop-active {
+  border-bottom-color: rgba(110, 69, 52, 0.28);
 }
 
 .day-header {
@@ -2371,6 +2439,11 @@ textarea {
 .day-body {
   gap: 8px;
   margin-top: 12px;
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.day-body.drop-active {
+  animation: day-drop-body-enter 180ms ease;
 }
 
 .stop-card {
@@ -2382,6 +2455,7 @@ textarea {
   border-radius: 6px;
   background: white;
   cursor: grab;
+  user-select: none;
   transition:
     border-color 140ms ease,
     box-shadow 140ms ease,
@@ -2392,7 +2466,6 @@ textarea {
 .stop-card:hover {
   border-color: rgba(110, 69, 52, 0.45);
   box-shadow: 0 6px 16px rgba(48, 34, 28, 0.08);
-  transform: translateY(-1px);
 }
 
 .stop-card:hover .stop-index {
@@ -2401,6 +2474,28 @@ textarea {
 
 .stop-card:active {
   cursor: grabbing;
+}
+
+.stop-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  min-height: 28px;
+  margin-top: 1px;
+  flex-shrink: 0;
+  color: var(--ink-4);
+  font-size: 12px;
+  line-height: 0.9;
+  letter-spacing: -1px;
+  cursor: grab;
+  pointer-events: none;
+  transition: color 140ms ease, transform 140ms ease;
+}
+
+.stop-card:hover .stop-drag-handle {
+  color: var(--mother-earth);
+  transform: translateX(-1px);
 }
 
 .stop-card.active {
@@ -2449,11 +2544,19 @@ textarea {
 
 .stop-notes {
   font-family: var(--sans);
+  font-size: 13px;
+  color: var(--ink-2);
   line-height: 1.55;
 }
 
 .stop-card.dragging {
-  opacity: 0.45;
+  opacity: 0.38;
+  pointer-events: none;
+}
+
+.stop-card.drop-before {
+  outline: 2px solid rgba(110, 69, 52, 0.45);
+  outline-offset: 2px;
 }
 
 .stop-menu {
@@ -2468,12 +2571,41 @@ textarea {
   height: 14px;
   margin: 6px 0;
   border-radius: 999px;
-  transition: background-color 140ms ease, box-shadow 140ms ease;
+  transition: height 160ms ease, background-color 140ms ease, box-shadow 140ms ease;
 }
 
 .stop-dropzone.active {
+  height: 24px;
   background: rgba(110, 69, 52, 0.14);
   box-shadow: inset 0 0 0 1px rgba(110, 69, 52, 0.35);
+  animation: stop-drop-pulse 1s ease-in-out infinite;
+}
+
+.day-empty-dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  padding: 14px;
+  border: 1px dashed rgba(110, 69, 52, 0.28);
+  border-radius: 10px;
+  background: rgba(110, 69, 52, 0.04);
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--ink-3);
+  text-align: center;
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.day-empty-dropzone.active {
+  transform: translateY(-1px);
+  background: rgba(110, 69, 52, 0.09);
+  border-color: rgba(110, 69, 52, 0.42);
+  box-shadow: 0 10px 24px rgba(48, 34, 28, 0.06);
 }
 
 .empty-dropzone {
@@ -2485,6 +2617,28 @@ textarea {
   color: var(--ink-3);
   text-align: center;
   background: rgba(255, 255, 255, 0.6);
+}
+
+.empty-dropzone.drag-target {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-color: rgba(110, 69, 52, 0.28);
+  background: rgba(110, 69, 52, 0.04);
+  color: var(--ink-2);
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.empty-dropzone.drag-target.active {
+  transform: translateY(-1px);
+  background: rgba(110, 69, 52, 0.1);
+  border-color: rgba(110, 69, 52, 0.42);
+  box-shadow: 0 10px 24px rgba(48, 34, 28, 0.06);
 }
 
 .edit-stop-form,
@@ -2528,14 +2682,46 @@ textarea {
 .edit-stop-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.edit-stop-actions .danger {
+  margin-left: auto;
 }
 
 .day-header.drag-over {
   box-shadow: inset 0 0 0 1px rgba(110, 69, 52, 0.35);
   background: rgba(110, 69, 52, 0.05);
+  transform: translateY(-1px);
+}
+
+@keyframes stop-drop-pulse {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 1px rgba(110, 69, 52, 0.35);
+  }
+
+  50% {
+    box-shadow:
+      inset 0 0 0 1px rgba(110, 69, 52, 0.45),
+      0 0 0 4px rgba(110, 69, 52, 0.06);
+  }
+}
+
+@keyframes day-drop-body-enter {
+  from {
+    opacity: 0.82;
+    transform: translateY(-3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .map-stage {
+  position: relative;
   height: 100%;
   min-height: 0;
 }
@@ -2573,6 +2759,8 @@ textarea {
 }
 
 .map-hint-card {
+  position: absolute;
+  z-index: 820;
   left: 36px;
   top: 36px;
   display: flex;
@@ -2581,6 +2769,10 @@ textarea {
   padding: 10px;
   font-family: var(--sans);
   font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow-soft);
 }
 
 .map-legend-card {
@@ -2741,6 +2933,67 @@ textarea {
   flex-direction: column;
   gap: 8px;
   overflow: auto;
+}
+
+.trip-explore-panel {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.trip-explore-head,
+.trip-explore-toolbar,
+.trip-explore-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trip-explore-title {
+  margin-top: 2px;
+  font-size: 15px;
+}
+
+.trip-explore-toolbar {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.trip-explore-list {
+  gap: 10px;
+  overflow: visible;
+}
+
+.trip-explore-card {
+  align-items: flex-start;
+}
+
+.trip-explore-card-copy {
+  gap: 0;
+}
+
+.trip-explore-card-top {
+  align-items: center;
+}
+
+.trip-explore-card-top .shell-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.trip-explore-description {
+  margin: 8px 0 0;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.trip-explore-loading,
+.trip-explore-empty {
+  min-height: 84px;
 }
 
 .explore-detail-card {
@@ -3649,7 +3902,7 @@ textarea {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  z-index: 80;
+  z-index: 1200;
 }
 
 .modal-card {
@@ -3959,6 +4212,10 @@ textarea {
     right: 12px;
     left: 12px;
     width: auto;
+  }
+
+  .input-footer-actions .shell-btn {
+    flex: 1 1 160px;
   }
 
   .map-toggle {
