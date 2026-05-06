@@ -34,11 +34,13 @@ const INTEREST_OPTIONS = [
   { label: 'Adventure', tone: 'earth' },
 ];
 
+
 const FULL_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
   year: 'numeric',
 });
+
 
 function toDate(value) {
   if (!value) return null;
@@ -315,6 +317,30 @@ export default function Analytics() {
     }
   });
 
+  const categoryCount = {};
+  filteredStops.forEach((stop) => {
+    const cat = stop.category || 'other';
+    categoryCount[cat] = (categoryCount[cat] ?? 0) + 1;
+  });
+  const categoryRows = Object.entries(categoryCount)
+    .sort((a, b) => b[1] - a[1])
+    .map(([cat, count]) => ({
+      label: cat.charAt(0).toUpperCase() + cat.slice(1),
+      count,
+      share: filteredStops.length > 0 ? (count / filteredStops.length) * 100 : 0,
+    }));
+
+  const destinationCount = {};
+  filteredTrips.forEach((trip) => {
+    const dest = trip.destination?.trim();
+    if (!dest) return;
+    destinationCount[dest] = (destinationCount[dest] ?? 0) + 1;
+  });
+  const topDestinations = Object.entries(destinationCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([dest, count]) => ({ dest, count }));
+
   const avgStopsPerTrip = filteredTrips.length > 0 ? filteredStops.length / filteredTrips.length : 0;
   const avgTripSpan = spanTripCount > 0 ? spanTotalDays / spanTripCount : 0;
 
@@ -322,6 +348,7 @@ export default function Analytics() {
   const stopsCreatedThisWeek = stops.filter(
     (stop) => filteredTripIds.has(stop.trip_id) && isInRange(stop.created_at, weekCutoff)
   ).length;
+
 
   const statusRows = [
     { key: 'current', label: 'Current', count: statusCounts.current },
@@ -377,6 +404,11 @@ export default function Analytics() {
       label: 'Avg. stops per trip',
       value: formatWholeNumber(avgStopsPerTrip),
       note: formatTripSpanNote(avgTripSpan),
+    },
+    {
+      label: 'Avg. trip duration',
+      value: spanTripCount > 0 ? `${formatAverage(spanTotalDays / spanTripCount)}d` : '—',
+      note: spanTripCount > 0 ? `across ${formatNumber(spanTripCount)} dated trips` : 'No dated trips yet',
     },
   ];
 
@@ -593,6 +625,61 @@ export default function Analytics() {
             )}
           </article>
 
+        </section>
+
+        <section className="analytics-section analytics-panel-grid">
+          <article className="panel-card analytics-panel">
+            <div className="panel-header-row analytics-panel-header">
+              <div>
+                <h2 className="section-title">Stop categories</h2>
+                <p className="section-copy">Breakdown of stop types across all planned trips.</p>
+              </div>
+            </div>
+            {categoryRows.length === 0 ? (
+              <div className="empty-inline"><p>No stops yet.</p></div>
+            ) : (
+              <div className="analytics-status-list">
+                {categoryRows.map((row) => (
+                  <div key={row.label} className="analytics-status-row">
+                    <div className="analytics-status-label">
+                      <span className="analytics-status-dot" />
+                      <span>{row.label}</span>
+                    </div>
+                    <div className="analytics-status-metrics">
+                      <span className="analytics-table-mono">{formatNumber(row.count)}</span>
+                      <span>{formatRate(row.share)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+
+          <article className="panel-card analytics-panel">
+            <div className="panel-header-row analytics-panel-header">
+              <div>
+                <h2 className="section-title">Top destinations</h2>
+                <p className="section-copy">Most planned destinations in the selected range.</p>
+              </div>
+            </div>
+            {topDestinations.length === 0 ? (
+              <div className="empty-inline"><p>No destinations yet.</p></div>
+            ) : (
+              <div className="analytics-status-list">
+                {topDestinations.map((row, index) => (
+                  <div key={row.dest} className="analytics-status-row">
+                    <div className="analytics-status-label">
+                      <span className="analytics-table-mono" style={{ minWidth: 16 }}>{index + 1}</span>
+                      <span>{row.dest}</span>
+                    </div>
+                    <div className="analytics-status-metrics">
+                      <span className="analytics-table-mono">{formatNumber(row.count)} {row.count === 1 ? 'trip' : 'trips'}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
         </section>
       </main>
     </div>
