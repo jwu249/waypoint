@@ -4314,3 +4314,152 @@ textarea {
     padding: 16px;
   }
 }
+
+/* ─── AI Copilot Panel ──────────────────────────────────────────── */
+
+.copilot-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 480px;
+  border-color: rgba(81, 50, 41, 0.22);
+  box-shadow: 0 4px 16px rgba(81, 50, 41, 0.1);
+}
+
+.copilot-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+
+.copilot-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0;
+  scrollbar-width: thin;
+}
+
+.copilot-msg {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.copilot-msg-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.copilot-msg-assistant .copilot-msg-avatar {
+  background: var(--mother-earth);
+  color: white;
+}
+
+.copilot-msg-user .copilot-msg-avatar {
+  background: var(--bg-3);
+  color: var(--ink-2);
+}
+
+.copilot-msg-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.copilot-msg-text {
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.copilot-msg-user .copilot-msg-text {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.copilot-actions-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: rgba(81, 50, 41, 0.08);
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--mother-earth);
+}
+
+.copilot-typing {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+.copilot-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+}
+
+.copilot-input {
+  flex: 1;
+  min-height: 34px;
+}
+
+/* ─── Optimize Banner ───────────────────────────────────────────── */
+
+.optimize-banner {
+  animation: analytics-fade-up 400ms ease forwards;
+}
+
+/* ─── Import URL Panel ──────────────────────────────────────────── */
+
+.import-url-panel {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.import-url-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.import-url-row .form-input {
+  flex: 1;
+}
+
+.import-file-label {
+  cursor: pointer;
+  position: relative;
+}
+
+.import-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
