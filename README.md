@@ -70,26 +70,6 @@ Frontend `/api` requests are proxied to `http://localhost:5001`.
 
 ---
 
-## Repository Submission Checklist
-
-- Complete project code included:
-  - `frontend/` (React + Vite app)
-  - `api/` (Flask backend)
-  - `supabase/` (schema + migration SQL)
-- Clean structure:
-  - `node_modules/`, `.venv/`, and build artifacts are gitignored.
-  - Environment files with secrets (`.env`, `.env.local`) are gitignored.
-- Reproducible setup:
-  - Python dependencies are version-pinned in [`requirements.txt`](./requirements.txt).
-  - Frontend dependency versions are locked via [`frontend/package-lock.json`](./frontend/package-lock.json).
-  - Use the setup commands above to run backend (`:5001`) and frontend (`:5173`) locally.
-- No secrets or model weights committed:
-  - Keep real keys only in local `.env` or deployment environment variables.
-  - Never commit `.env`.
-  - No model weight files (`.pt`, `.pth`, `.onnx`, `.h5`, `.ckpt`, `.safetensors`) should be tracked.
-
----
-
 ## Where to Access AI Features
 
 All AI features are part of the normal user flow — there are no standalone scripts.
